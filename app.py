@@ -1,15 +1,23 @@
+from typing import Any, Dict, List
 import streamlit as st
-from db import fetch_table, get_storage_bucket, get_supabase_client
 
-# إعداد الصفحة لتكون متجاوبة على الكمبيوتر والموبايل وباتجاه RTL
+from db import fetch_table, insert_record, write_audit_log
+from ui_components import (
+    render_admin_and_staff,
+    render_attendance_and_payroll,
+    render_dashboard,
+    render_kpis_and_reports,
+    render_leaves_module,
+    render_penalties_rewards_advances,
+)
+
 st.set_page_config(
     page_title="نظام HR — معامل ا.د أسامة عبد المتعال منصور",
     page_icon="🏥",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
-# تنسيق عربي متجاوب (كمبيوتر وموبايل) مع أزرار مدمجة وخطوط واضحة
 st.markdown(
     """
     <style>
@@ -23,56 +31,46 @@ st.markdown(
         }
 
         .main .block-container {
-            padding-top: 1.2rem;
+            padding-top: 1.1rem;
             padding-bottom: 2rem;
-            max-width: 1280px;
+            max-width: 1360px;
         }
 
-        .hero-card {
-            background: linear-gradient(135deg, #0f4c5c 0%, #1b6b7a 100%);
+        .top-banner {
+            background: linear-gradient(135deg, #0f4c5c 0%, #1c7285 100%);
             color: #ffffff;
-            padding: 20px 24px;
-            border-radius: 14px;
-            margin-bottom: 18px;
-            box-shadow: 0 4px 14px rgba(15, 76, 92, 0.14);
+            padding: 16px 22px;
+            border-radius: 12px;
+            margin-bottom: 14px;
         }
 
-        .hero-card h2 {
-            margin: 0 0 6px 0;
-            font-size: 22px;
+        .top-banner h3 {
+            margin: 0 0 4px 0;
+            font-size: 20px;
             font-weight: 700;
             color: #ffffff;
         }
 
-        .hero-card p {
+        .top-banner p {
             margin: 0;
-            font-size: 14px;
+            font-size: 13.5px;
             opacity: 0.92;
-        }
-
-        .info-box {
-            background-color: #f8fafc;
-            border: 1px solid #e2e8f0;
-            border-right: 4px solid #0f4c5c;
-            border-radius: 10px;
-            padding: 14px 16px;
-            margin-bottom: 14px;
         }
 
         .stButton > button {
             border-radius: 8px;
             font-weight: 600;
             font-size: 14px;
-            padding: 0.4rem 0.9rem;
+            padding: 0.35rem 0.85rem;
         }
 
         @media (max-width: 768px) {
-            .hero-card h2 {
-                font-size: 18px;
+            .top-banner h3 {
+                font-size: 17px;
             }
             .main .block-container {
-                padding-left: 0.8rem;
-                padding-right: 0.8rem;
+                padding-left: 0.7rem;
+                padding-right: 0.7rem;
             }
         }
     </style>
@@ -80,87 +78,144 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# الترويسة الترحيبية
-st.markdown(
-    """
-    <div class="hero-card">
-        <h2>أهلاً بك يا دكتور محمد — نظام الموارد البشرية (HR)</h2>
-        <p>معامل ا.د أسامة عبد المتعال منصور | بيئة تشغيل متجاوبة (كمبيوتر وموبايل) مرتبطة بـ Supabase</p>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
 
-# زر إعادة اختبار الاتصال وتحديث البيانات
-col_btn1, col_btn2, _ = st.columns([1.4, 1.6, 5])
-with col_btn1:
-    if st.button("🔄 اختبار الاتصال الآن", use_container_width=True):
-        st.cache_data.clear()
-        st.rerun()
+def _ensure_bootstrap_gm(employees: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """إنشاء حساب مدير عام أولي إذا كان جدول الموظفين فارغاً تماماً."""
+    if employees:
+        return employees
+    created = insert_record(
+        "employees",
+        {
+            "employee_no": "1",
+            "name_ar": "محمد النصيري عبده النصيري",
+            "job_title": "مدير عام المعامل",
+            "role": "general_manager",
+            "hire_date": "2020-01-01",
+            "base_salary": 15000,
+            "pin_code": "1234",
+            "status": "active",
+        },
+    )
+    write_audit_log("employees", "bootstrap_gm", "إضافة", "إنشاء حساب المدير العام الأولي")
+    return [created] if created else fetch_table("employees", limit=1500)
 
-with col_btn2:
-    st.caption("الوضع الحالي: فحص الاتصال والتهيئة الأولية")
 
-# اختبار الاتصال بـ Supabase وقراءة الإعدادات وأنواع الإجازات
-try:
-    _client = get_supabase_client()
-    bucket_name = get_storage_bucket()
-    org_rows = fetch_table("org_settings", limit=10)
-    leave_types_rows = fetch_table("leave_types", limit=50)
-    emp_rows = fetch_table("employees", limit=1000)
-    dept_rows = fetch_table("departments", limit=100)
-    shift_rows = fetch_table("shifts", limit=100)
+def main() -> None:
+    try:
+        employees = _ensure_bootstrap_gm(fetch_table("employees", order_by="employee_no", limit=1500))
+        departments = fetch_table("departments", order_by="code", limit=200)
+        shifts = fetch_table("shifts", order_by="name", limit=200)
+        leave_types = fetch_table("leave_types", order_by="id", limit=100)
+        leave_balances = fetch_table("leave_balances", limit=1500)
+        leave_requests = fetch_table("leave_requests", order_by="created_at", desc=True, limit=3000)
+        penalties_rewards = fetch_table("penalties_rewards", order_by="created_at", desc=True, limit=3000)
+        advances = fetch_table("advances", order_by="created_at", desc=True, limit=2000)
+        attendance_logs = fetch_table("attendance_logs", order_by="work_date", desc=True, limit=10000)
+        official_holidays = fetch_table("official_holidays", order_by="holiday_date", limit=200)
+        payroll_runs = fetch_table("payroll_runs", order_by="payroll_month", desc=True, limit=5000)
+        kpi_evaluations = fetch_table("kpi_evaluations", order_by="created_at", desc=True, limit=2000)
+        org_rows = fetch_table("org_settings", limit=5)
+        org_settings: Dict[str, Any] = org_rows[0] if org_rows else {"org_name": "معامل ا.د أسامة عبد المتعال منصور"}
+    except Exception as exc:
+        st.error("تعذر تحميل البيانات من Supabase.")
+        st.code(str(exc), language="text")
+        return
 
-    st.success("✅ تم الاتصال بقاعدة بيانات Supabase (osama-lab-hr) بنجاح!")
+    if "current_user" not in st.session_state:
+        st.markdown(
+            """
+            <div class="top-banner">
+                <h3>معامل ا.د أسامة عبد المتعال منصور</h3>
+                <p>نظام الموارد البشرية (HR) والمرتبات — تسجيل الدخول</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        active_emps = [e for e in employees if (e.get("status") or "active") == "active"]
+        labels = {f"{e.get('name_ar')} (#{e.get('employee_no')})": e for e in active_emps}
+        if not labels:
+            st.warning("لا يوجد موظفون نشطون.")
+            return
 
-    org_name = org_rows[0].get("org_name", "معامل ا.د أسامة عبد المتعال منصور") if org_rows else "معامل ا.د أسامة عبد المتعال منصور"
-    admin_year = org_rows[0].get("admin_year", "2026") if org_rows else "2026"
-    grace_late = org_rows[0].get("grace_late_minutes", 15) if org_rows else 15
-    grace_early = org_rows[0].get("grace_early_minutes", 5) if org_rows else 5
+        with st.form("login_form"):
+            chosen_lbl = st.selectbox("اختر الحساب", list(labels.keys()))
+            pin_inp = st.text_input("رمز الدخول (PIN)", type="password", placeholder="الافتراضي 1234")
+            if st.form_submit_button("دخول", type="primary"):
+                emp_sel = labels[chosen_lbl]
+                saved_pin = str(emp_sel.get("pin_code") or "").strip()
+                if not saved_pin or pin_inp.strip() == saved_pin:
+                    st.session_state["current_user"] = emp_sel
+                    st.rerun()
+                else:
+                    st.error("رمز الدخول غير صحيح.")
+        return
+
+    current_user = st.session_state["current_user"]
+
+    with st.sidebar:
+        st.markdown(f"### 👤 {current_user.get('name_ar')}")
+        st.caption(f"الدور: `{current_user.get('role')}` | رقم: `{current_user.get('employee_no')}`")
+        page = st.radio(
+            "القائمة الرئيسية",
+            [
+                "الداش بورد",
+                "الإجازات والأرصدة",
+                "الجزاءات والمكافآت والسلف",
+                "البصمة والـ Payroll",
+                "التقييم (KPIs) والتقارير",
+                "الموظفون والفروع والصلاحيات",
+            ],
+        )
+        st.divider()
+        if st.button("🔄 تحديث البيانات", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
+        if st.button("تسجيل الخروج", use_container_width=True):
+            del st.session_state["current_user"]
+            st.rerun()
 
     st.markdown(
         f"""
-        <div class="info-box">
-            <strong>المؤسسة:</strong> {org_name} &nbsp;|&nbsp;
-            <strong>السنة الإدارية:</strong> {admin_year} &nbsp;|&nbsp;
-            <strong>سماح الحضور:</strong> {grace_late} د &nbsp;|&nbsp;
-            <strong>سماح الانصراف:</strong> {grace_early} د &nbsp;|&nbsp;
-            <strong>حاوية المرفقات:</strong> <code>{bucket_name}</code>
+        <div class="top-banner">
+            <h3>{org_settings.get('org_name') or 'معامل ا.د أسامة عبد المتعال منصور'}</h3>
+            <p>نظام HR متكامل (الإجازات، الجزاءات والمكافآت، السلف، البصمة والمرتبات، الـ KPIs والتقارير)</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("الموظفون المسجلون", len(emp_rows))
-    m2.metric("الفروع والأقسام", len(dept_rows))
-    m3.metric("الورديات (صباحي/مسائي)", len(shift_rows))
-    m4.metric("أنواع الإجازات المفعّلة", len(leave_types_rows))
-
-    if leave_types_rows:
-        st.subheader("قواعد وأنواع الإجازات المحمّلة في قاعدة البيانات")
-        st.dataframe(
-            [
-                {
-                    "النوع": row.get("name_ar"),
-                    "الكود": row.get("code"),
-                    "خصم من رصيد": "نعم" if row.get("deducts") else "لا",
-                    "المجال": row.get("balance_field") or "—",
-                    "تنبيه مسبق (أيام)": row.get("notice_days", 0),
-                    "حد أقصى للطلب": row.get("max_days_per_request") or "مفتوح",
-                    "حد أقصى شهري": row.get("max_days_per_month") or "مفتوح",
-                    "تفعيل بعد (يوم تعيين)": row.get("min_tenure_days", 0),
-                }
-                for row in leave_types_rows
-            ],
-            use_container_width=True,
-            hide_index=True,
+    if page == "الداش بورد":
+        render_dashboard(employees, departments, shifts, leave_requests, attendance_logs, advances)
+    elif page == "الإجازات والأرصدة":
+        render_leaves_module(current_user, employees, departments, leave_types, leave_balances, leave_requests, org_settings)
+    elif page == "الجزاءات والمكافآت والسلف":
+        render_penalties_rewards_advances(current_user, employees, penalties_rewards, advances)
+    elif page == "البصمة والـ Payroll":
+        render_attendance_and_payroll(
+            current_user,
+            employees,
+            shifts,
+            attendance_logs,
+            penalties_rewards,
+            advances,
+            official_holidays,
+            payroll_runs,
+            org_settings,
         )
+    elif page == "التقييم (KPIs) والتقارير":
+        render_kpis_and_reports(
+            current_user,
+            employees,
+            leave_requests,
+            attendance_logs,
+            penalties_rewards,
+            advances,
+            kpi_evaluations,
+            org_settings,
+        )
+    elif page == "الموظفون والفروع والصلاحيات":
+        render_admin_and_staff(current_user, employees, departments, shifts, org_settings)
 
-except Exception as exc:
-    st.error("❌ تعذر إتمام الاتصال بقاعدة بيانات Supabase.")
-    st.code(str(exc), language="text")
-    st.info(
-        "تأكد من إضافة SUPABASE_URL و SUPABASE_KEY داخل Secrets في Streamlit Cloud، "
-        "ومن تشغيل سكربت SQL الخاص بالجداول في مشروع osama-lab-hr."
-    )
+
+if __name__ == "__main__":
+    main()
