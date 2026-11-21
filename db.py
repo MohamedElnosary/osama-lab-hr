@@ -4,11 +4,19 @@ import streamlit as st
 from supabase import Client, create_client
 
 
+def _clean_supabase_url(raw_url: str) -> str:
+    """تنظيف رابط Supabase لضمان خلوه من مسارات REST الإضافية."""
+    cleaned = (raw_url or "").strip().rstrip("/")
+    if "/rest/v1" in cleaned:
+        cleaned = cleaned.split("/rest/v1")[0].rstrip("/")
+    return cleaned
+
+
 @st.cache_resource
 def get_supabase_client() -> Client:
     """إنشاء عميل اتصال بـ Supabase باستخدام Streamlit Secrets مع التخزين المؤقت."""
-    url = st.secrets.get("SUPABASE_URL", "").strip()
-    key = st.secrets.get("SUPABASE_KEY", "").strip()
+    url = _clean_supabase_url(st.secrets.get("SUPABASE_URL", ""))
+    key = (st.secrets.get("SUPABASE_KEY", "") or "").strip()
     if not url or not key:
         raise RuntimeError(
             "يرجى ضبط SUPABASE_URL و SUPABASE_KEY داخل إعدادات Secrets في Streamlit."
@@ -18,7 +26,8 @@ def get_supabase_client() -> Client:
 
 def get_storage_bucket() -> str:
     """إرجاع اسم حاوية المرفقات في Supabase Storage."""
-    return st.secrets.get("SUPABASE_STORAGE_BUCKET", "hr-attachments").strip() or "hr-attachments"
+    bucket = (st.secrets.get("SUPABASE_STORAGE_BUCKET", "hr-attachments") or "").strip()
+    return bucket or "hr-attachments"
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -29,7 +38,7 @@ def fetch_table(
     desc: bool = False,
     limit: int = 2000,
 ) -> List[Dict[str, Any]]:
-    """قراءة بيانات جدول من Supabase مع دعم عدد كبير من السجلات حتى 1,000+ موظف."""
+    """قراءة بيانات جدول من Supabase مع دعم حتى 1,000+ موظف وسجلات كثيفة."""
     client = get_supabase_client()
     query = client.table(table_name).select(columns).limit(limit)
     if order_by:
@@ -71,6 +80,42 @@ def delete_record(table_name: str, record_id: Any) -> bool:
     return True
 
 
+def upsert_record(
+    table_name: str,
+    payload: Dict[str, Any],
+    on_conflict: str = "id",
+) -> Dict[str, Any]:
+    """إضافة أو تحديث سجل بناءً على عمود التعارض المحدد."""
+    payload_with_ts = {
+        **payload,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    client = get_supabase_client()
+    response = (
+        client.table(table_name)
+        .upsert(payload_with_ts, on_conflict=on_conflict)
+        .execute()
+    )
+    clear_data_cache()
+    return response.data[0] if response.data else {}
+
+
+def upload_attachment(file_bytes: bytes, filename: str, content_type: str = "application/octet-stream") -> Optional[str]:
+    """رفع مرفق (مثل تقرير إجازة مرضية) إلى Supabase Storage وإرجاع الرابط العام."""
+    if not file_bytes or not filename:
+        return None
+    client = get_supabase_client()
+    bucket = get_storage_bucket()
+    safe_name = filename.replace(" ", "_")
+    storage_path = f"leaves/{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{safe_name}"
+    client.storage.from_(bucket).upload(
+        path=storage_path,
+        file=file_bytes,
+        file_options={"content-type": content_type, "upsert": "true"},
+    )
+    return client.storage.from_(bucket).get_public_url(storage_path)
+
+
 def write_audit_log(
     table_name: str,
     action: str,
@@ -94,5 +139,4 @@ def write_audit_log(
         client.table("audit_log").insert(payload).execute()
         clear_data_cache()
     except Exception:
-        # لا نوقف العملية الأساسية إذا تعذر تسجيل السجل في لحظة معينة
         pass
