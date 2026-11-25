@@ -1797,7 +1797,7 @@ def render_penalties_rewards_advances(
 
 
 # =====================================================================
-# 5. البصمة والـ Payroll (توحيد مسمى إضافي التأخير والانصراف)
+# 5. البصمة والـ Payroll (شيت المرتبات للمدير العام و HR ورئيس مجلس الإدارة فقط + إضافي الأجور والانصراف)
 # =====================================================================
 def render_attendance_and_payroll(
     current_user: Dict[str, Any],
@@ -1826,7 +1826,7 @@ def render_attendance_and_payroll(
 
     can_upload_att = user_role in ("general_manager", "hr") or perms.get("manage_payroll")
     can_view_ot_log = user_role in ("general_manager", "hr") or perms.get("manage_payroll")
-    can_view_all_payroll_sheet = user_role in ("general_manager", "hr", "manager") or perms.get("manage_payroll")
+    can_view_all_payroll_sheet = user_role in ("general_manager", "hr", "chairman")
 
     att_by_emp_date: Dict[tuple, Dict[str, Any]] = {}
     for rec in attendance_logs:
@@ -2388,7 +2388,7 @@ def render_attendance_and_payroll(
                             <td class="pay-plus">+ {my_res['rewards_total']:,.2f} ج</td>
                         </tr>
                         <tr>
-                            <td>إضافي التأخير والانصراف</td>
+                            <td>إضافي الأجور والانصراف</td>
                             <td class="pay-plus">+ {my_res['overtime_pay']:,.2f} ج</td>
                         </tr>
                         <tr>
@@ -2419,10 +2419,7 @@ def render_attendance_and_payroll(
             st.markdown("#### 📊 شيت المرتبات الشهري والأرشيف")
             pay_ym = st.text_input("شهر المرتب (YYYY-MM)", value=date.today().strftime("%Y-%m"), key="pay_sheet_ym")
 
-            if user_role in ("general_manager", "hr") or perms.get("manage_payroll"):
-                target_payroll_emps = [e for e in employees if (e.get("status") or "active") == "active"]
-            else:
-                target_payroll_emps = _get_subordinate_employees(current_user, employees)
+            target_payroll_emps = [e for e in employees if (e.get("status") or "active") == "active"]
 
             computed_list = []
             for emp in target_payroll_emps:
@@ -2448,7 +2445,7 @@ def render_attendance_and_payroll(
                         "المرتب الأساسي": r["base_salary"],
                         "إجازات رسمية (+يوم)": r["holiday_bonus"],
                         "المكافآت": r["rewards_total"],
-                        "إضافي التأخير والانصراف": r["overtime_pay"],
+                        "إضافي الأجور والانصراف": r["overtime_pay"],
                         "خصم السلف": r["advances_deduction"],
                         "خصم الجزاءات": r["penalties_deduction"],
                         "خصم التأخير/الانصراف": r["late_deduction"],
@@ -2474,7 +2471,7 @@ def render_attendance_and_payroll(
                     "المرتب الأساسي": tot_base,
                     "إجازات رسمية (+يوم)": tot_hol,
                     "المكافآت": tot_rew,
-                    "إضافي التأخير والانصراف": tot_ot,
+                    "إضافي الأجور والانصراف": tot_ot,
                     "خصم السلف": tot_adv,
                     "خصم الجزاءات": tot_pen,
                     "خصم التأخير/الانصراف": tot_late,
@@ -2487,7 +2484,7 @@ def render_attendance_and_payroll(
                 g1, g2, g3, g4, g5, g6 = st.columns(6)
                 g1.metric("إجمالي المرتبات الأساسية", f"{tot_base:,.2f} ج")
                 g2.metric("إجمالي المكافآت", f"{tot_rew:,.2f} ج")
-                g3.metric("إضافي التأخير والانصراف", f"{tot_ot:,.2f} ج")
+                g3.metric("إضافي الأجور والانصراف", f"{tot_ot:,.2f} ج")
                 g4.metric("إجمالي الخصومات", f"{tot_all_ded:,.2f} ج")
                 g5.metric("إجمالي الجزاءات", f"{tot_pen:,.2f} ج")
                 g6.metric("إجمالي المرتبات الفعلية", f"{tot_net:,.2f} ج")
@@ -2548,7 +2545,7 @@ def render_attendance_and_payroll(
                             "الأساسي": p.get("base_salary"),
                             "إجازات رسمية": p.get("holiday_bonus"),
                             "مكافآت": p.get("rewards_total"),
-                            "إضافي التأخير والانصراف": p.get("overtime_pay"),
+                            "إضافي الأجور والانصراف": p.get("overtime_pay"),
                             "سلف": p.get("advances_deduction"),
                             "جزاءات": p.get("penalties_deduction"),
                             "تأخيرات": p.get("late_deduction"),
