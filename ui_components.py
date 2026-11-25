@@ -119,10 +119,10 @@ def _compute_attendance_breakdown(
 ) -> Dict[str, int]:
     """
     تفصيل الحضور والانصراف بعد خصم السماح المقرر من الإعدادات:
-    - تأخير دخول (دقيقة): صافي التأخير بعد خصم سماح الحضور.
-    - مبكر دخول (دقيقة): دقائق الحضور قبل بداية الدوام.
-    - مبكر انصراف (دقيقة): صافي الانصراف المبكر بعد خصم سماح الانصراف.
-    - إضافي انصراف (دقيقة): دقائق العمل بعد نهاية الدوام.
+    - تأخير دخول: صافي دقائق التأخير بعد خصم سماح الحضور.
+    - إضافي دخول: دقائق الحضور المبكر قبل بداية الدوام.
+    - انصراف مبكر: صافي دقائق الانصراف المبكر بعد خصم سماح الانصراف.
+    - إضافة انصراف: دقائق العمل بعد نهاية الدوام.
     """
     s_start_m = _to_minutes_from_any_time(rec.get("scheduled_start") or emp.get("work_start_time") or "09:00:00")
     if s_start_m is None:
@@ -195,6 +195,38 @@ def _normalize_time_text(raw_val: Any) -> Optional[str]:
         return f"{hh:02d}:{mm:02d}:{ss:02d}"
     except ValueError:
         return None
+
+
+def _get_holiday_period_bounds(hol: Dict[str, Any]) -> tuple:
+    """إرجاع (تاريخ البداية، تاريخ النهاية، عدد الأيام) لسجل إجازة رسمية."""
+    s_dt = parse_date_safe(hol.get("start_date")) or parse_date_safe(hol.get("holiday_date"))
+    e_dt = parse_date_safe(hol.get("end_date")) or s_dt
+    if s_dt and e_dt and e_dt >= s_dt:
+        cnt = int((e_dt - s_dt).days + 1)
+        return s_dt, e_dt, cnt
+    cnt_saved = int(hol.get("days_count") or 1)
+    return s_dt, e_dt, max(1, cnt_saved)
+
+
+def _get_non_payroll_holiday_map(official_holidays: List[Dict[str, Any]]) -> Dict[str, str]:
+    """
+    خريطة {YYYY-MM-DD: 'إجازة رسمية — ...'} للإجازات الرسمية التي لا تُضاف للمرتب (add_day_to_payroll == False).
+    """
+    out: Dict[str, str] = {}
+    for hol in official_holidays:
+        if hol.get("active", True) is False:
+            continue
+        if bool(hol.get("add_day_to_payroll", False)):
+            continue
+        s_dt, e_dt, _ = _get_holiday_period_bounds(hol)
+        if not s_dt or not e_dt or e_dt < s_dt:
+            continue
+        h_name = (hol.get("name_ar") or "إجازة رسمية").strip()
+        cur = s_dt
+        while cur <= e_dt:
+            out[cur.isoformat()] = f"إجازة رسمية ({h_name})"
+            cur += timedelta(days=1)
+    return out
 
 
 def _sync_leave_days_state() -> None:
@@ -484,7 +516,7 @@ def _filter_visible_penalties_rewards(
 
 
 # =====================================================================
-# تجميع كافة الموافقات المعلقة في مكان واحد (تطبيق السيكونس الصحيح للوقت الإضافي)
+# تجميع كافة الموافقات المعلقة في مكان واحد
 # =====================================================================
 def get_pending_items_bundle(
     current_user: Dict[str, Any],
@@ -1765,7 +1797,7 @@ def render_penalties_rewards_advances(
 
 
 # =====================================================================
-# 5. البصمة والـ Payroll (شيت المرتب للجميع + شيت المرتبات للمدير المباشر و HR والمدير العام)
+# 5. البصمة والـ Payroll (تظليل الجمعة والأجازات + منع البصمة في أيامها + أسماء الأعمدة الجديدة)
 # =====================================================================
 def render_attendance_and_payroll(
     current_user: Dict[str, Any],
@@ -1785,6 +1817,7 @@ def render_attendance_and_payroll(
     my_ids = _emp_identifiers(current_user)
     user_role = (current_user.get("role") or "employee").strip().lower()
     all_leaves = leave_requests or []
+    non_pay_holiday_map = _get_non_payroll_holiday_map(official_holidays)
 
     emp_by_no = {str(e.get("employee_no") or "").strip(): e for e in employees if e.get("employee_no")}
     emp_by_id = {str(e["id"]): e for e in employees if e.get("id")}
@@ -1828,13 +1861,16 @@ def render_attendance_and_payroll(
         sheet_rows = []
         for d_item in cycle_days:
             d_iso = d_item.isoformat()
+            is_fri = d_item.weekday() == 4
+            non_pay_hol_txt = non_pay_holiday_map.get(d_iso, "")
+            leave_txt = my_leave_map.get(d_iso, "")
+
             rec: Dict[str, Any] = {}
             for candidate_id in my_ids:
                 if (candidate_id, d_iso) in att_by_emp_date:
                     rec = att_by_emp_date[(candidate_id, d_iso)]
                     break
 
-            leave_txt = my_leave_map.get(d_iso, "")
             has_att = bool(rec.get("check_in") or rec.get("check_out"))
             bd = _compute_attendance_breakdown(rec, current_user, grace_late, grace_early) if has_att else {
                 "late_in": 0,
@@ -1843,20 +1879,51 @@ def render_attendance_and_payroll(
                 "overtime_out": 0,
             }
 
-            cin_disp = str(rec.get("check_in") or "")[:5] if rec.get("check_in") else ("ممنوع البصمة — إجازة" if leave_txt else "—")
-            cout_disp = str(rec.get("check_out") or "")[:5] if rec.get("check_out") else ("ممنوع البصمة — إجازة" if leave_txt else "—")
+            if is_fri:
+                day_state = "جمعة"
+            elif non_pay_hol_txt:
+                day_state = non_pay_hol_txt
+            elif leave_txt:
+                day_state = leave_txt
+            elif has_att:
+                day_state = "حضور / دوام"
+            else:
+                day_state = "—"
+
+            blocked_day = is_fri or bool(non_pay_hol_txt) or bool(leave_txt)
+            cin_disp = str(rec.get("check_in") or "")[:5] if rec.get("check_in") else ("ممنوع البصمة" if blocked_day else "—")
+            cout_disp = str(rec.get("check_out") or "")[:5] if rec.get("check_out") else ("ممنوع البصمة" if blocked_day else "—")
+
             sheet_rows.append({
                 "التاريخ (work_date)": d_iso,
-                "حالة الإجازة": leave_txt or ("حضور / دوام" if has_att else "—"),
+                "الحالة / الإجازة": day_state,
                 "دخول (check_in)": cin_disp,
                 "انصراف (check_out)": cout_disp,
-                "تأخير دخول (دقيقة)": bd["late_in"],
-                "مبكر دخول (دقيقة)": bd["early_in"],
-                "مبكر انصراف (دقيقة)": bd["early_out"],
-                "إضافي انصراف (دقيقة)": bd["overtime_out"],
+                "تأخير دخول": bd["late_in"],
+                "إضافي دخول": bd["early_in"],
+                "انصراف مبكر": bd["early_out"],
+                "إضافة انصراف": bd["overtime_out"],
             })
 
-        st.dataframe(sheet_rows, use_container_width=True, hide_index=True)
+        df_my_sheet = pd.DataFrame(sheet_rows)
+
+        def _style_my_sheet(row: pd.Series) -> List[str]:
+            st_txt = str(row.get("الحالة / الإجازة") or "")
+            if st_txt == "جمعة" or st_txt.startswith("إجازة رسمية"):
+                bg = "background-color: #fee2e2; color: #991b1b; font-weight: 600;"
+            elif st_txt.startswith("إجازة"):
+                bg = "background-color: #fef9c3; color: #854d0e; font-weight: 600;"
+            else:
+                bg = ""
+            styles = []
+            for col_name in row.index:
+                if col_name in ("تأخير دخول", "إضافي دخول", "انصراف مبكر", "إضافة انصراف"):
+                    styles.append(bg + " text-align: center;")
+                else:
+                    styles.append(bg)
+            return styles
+
+        st.dataframe(df_my_sheet.style.apply(_style_my_sheet, axis=1), use_container_width=True, hide_index=True)
     t_idx += 1
 
     # --- 2) رفع البصمة (للمدير العام و HR فقط) ---
@@ -1874,7 +1941,8 @@ def render_attendance_and_payroll(
                 st.caption(
                     f"الأعمدة المطلوبة: `employee_no`، `work_date` (مثال: `2026-11-05`)، "
                     f"`check_in` (مثال: `09:00`)، `check_out` (مثال: `17:00`) بنظام 24 ساعة — "
-                    f"سماح الحضور: {grace_late} دقيقة | سماح الانصراف: {grace_early} دقيقة."
+                    f"سماح الحضور: {grace_late} دقيقة | سماح الانصراف: {grace_early} دقيقة. "
+                    f"(يتم تجاهل أيام الجمعة والأجازات تلقائياً)."
                 )
                 att_file = st.file_uploader("رفع ملف البصمة", type=["xlsx", "xls", "csv"], key="att_excel_uploader")
                 if att_file is not None:
@@ -1887,6 +1955,7 @@ def render_attendance_and_payroll(
 
                     if st.button("معالجة وحفظ سجلات البصمة في قاعدة البيانات", type="primary", key="save_uploaded_att_btn"):
                         saved_cnt = 0
+                        skipped_days_cnt = 0
                         for _, r in df_att.iterrows():
                             eno = str(r.get("employee_no") or "").strip()
                             emp = emp_by_no.get(eno)
@@ -1895,6 +1964,12 @@ def render_attendance_and_payroll(
                             w_dt = parse_date_safe(r.get("work_date"))
                             if not w_dt:
                                 continue
+
+                            emp_lv_map = _get_leave_map_for_employee(emp, all_leaves)
+                            if w_dt.weekday() == 4 or w_dt.isoformat() in emp_lv_map or w_dt.isoformat() in non_pay_holiday_map:
+                                skipped_days_cnt += 1
+                                continue
+
                             s_start = str(emp.get("work_start_time") or "09:00:00")
                             s_end = str(emp.get("work_end_time") or "17:00:00")
                             cin_norm = _normalize_time_text(r.get("check_in"))
@@ -1936,7 +2011,8 @@ def render_attendance_and_payroll(
                             by_name=current_user.get("name_ar", ""),
                             by_user_id=user_id,
                         )
-                        st.success(f"✅ تم حفظ ومعالجة {saved_cnt} سجل بصمة بنجاح.")
+                        extra_msg = f" (تم استبعاد {skipped_days_cnt} يوم جمعة/إجازة)" if skipped_days_cnt > 0 else ""
+                        st.success(f"✅ تم حفظ ومعالجة {saved_cnt} سجل بصمة بنجاح{extra_msg}.")
                         st.rerun()
 
             else:
@@ -1957,54 +2033,91 @@ def render_attendance_and_payroll(
                 st.caption(
                     f"الموظف: **{man_emp.get('name_ar')}** | رقم: `{man_emp.get('employee_no')}` | "
                     f"مواعيد العمل: `{str(man_emp.get('work_start_time') or '09:00')[:5]}` إلى `{str(man_emp.get('work_end_time') or '17:00')[:5]}` | "
-                    f"سماح الدخول: {grace_late} د | سماح الانصراف: {grace_early} د | "
                     f"الفترة: `{man_days[0].isoformat()}` إلى `{man_days[-1].isoformat()}`"
                 )
                 st.info(
-                    "📌 **صيغة إدخال الوقت (نظام 24 ساعة HH:MM):** "
-                    "مثال للدخول (`check_in`): **`09:00`** أو **`09:15`** | "
-                    "مثال للانصراف (`check_out`): **`17:00`** أو **`17:30`**"
+                    "📌 **صيغة إدخال الوقت (نظام 24 ساعة HH:MM):** مثال للدخول: **`09:00`** | مثال للانصراف: **`17:00`** — "
+                    "🔴 أيام الجمعة والإجازات الرسمية غير المضافة مظللة بالأحمر ولا يُسمح فيها بالبصمة | "
+                    "🟡 أيام الإجازات مظللة بالأصفر ولا يُسمح فيها بالبصمة."
                 )
 
                 grid_seed = []
+                blocked_iso_set = set()
                 for d_obj in man_days:
                     d_iso = d_obj.isoformat()
+                    is_fri = d_obj.weekday() == 4
+                    non_pay_hol_txt = non_pay_holiday_map.get(d_iso, "")
+                    lv_label = man_leave_map.get(d_iso, "")
+
+                    if is_fri or bool(non_pay_hol_txt) or bool(lv_label):
+                        blocked_iso_set.add(d_iso)
+
                     existing_rec: Dict[str, Any] = {}
                     for cid in man_emp_all_ids:
                         if (cid, d_iso) in att_by_emp_date:
                             existing_rec = att_by_emp_date[(cid, d_iso)]
                             break
-                    lv_label = man_leave_map.get(d_iso, "")
-                    bd = _compute_attendance_breakdown(existing_rec, man_emp, grace_late, grace_early) if existing_rec else {
+
+                    has_rec = bool(existing_rec.get("check_in") or existing_rec.get("check_out"))
+                    bd = _compute_attendance_breakdown(existing_rec, man_emp, grace_late, grace_early) if has_rec else {
                         "late_in": 0,
                         "early_in": 0,
                         "early_out": 0,
                         "overtime_out": 0,
                     }
+
+                    if is_fri:
+                        status_col = "جمعة"
+                    elif non_pay_hol_txt:
+                        status_col = non_pay_hol_txt
+                    elif lv_label:
+                        status_col = lv_label
+                    else:
+                        status_col = "—"
+
                     grid_seed.append({
                         "التاريخ": d_iso,
-                        "الإجازة": lv_label or "—",
-                        "check_in": str(existing_rec.get("check_in") or "")[:5],
-                        "check_out": str(existing_rec.get("check_out") or "")[:5],
+                        "الحالة / الإجازة": status_col,
+                        "دخول": "" if blocked_iso_set.__contains__(d_iso) else str(existing_rec.get("check_in") or "")[:5],
+                        "انصراف": "" if blocked_iso_set.__contains__(d_iso) else str(existing_rec.get("check_out") or "")[:5],
                         "تأخير دخول": bd["late_in"],
-                        "مبكر انصراف": bd["early_out"],
-                        "إضافي انصراف": bd["overtime_out"],
+                        "إضافي دخول": bd["early_in"],
+                        "انصراف مبكر": bd["early_out"],
+                        "إضافة انصراف": bd["overtime_out"],
                     })
 
+                df_man_seed = pd.DataFrame(grid_seed)
+
+                def _style_man_grid(row: pd.Series) -> List[str]:
+                    st_val = str(row.get("الحالة / الإجازة") or "")
+                    if st_val == "جمعة" or st_val.startswith("إجازة رسمية"):
+                        bg = "background-color: #fee2e2; color: #991b1b; font-weight: 600;"
+                    elif st_val.startswith("إجازة"):
+                        bg = "background-color: #fef9c3; color: #854d0e; font-weight: 600;"
+                    else:
+                        bg = ""
+                    styles = []
+                    for col_name in row.index:
+                        if col_name in ("دخول", "انصراف", "تأخير دخول", "إضافي دخول", "انصراف مبكر", "إضافة انصراف"):
+                            styles.append(bg + " text-align: center;")
+                        else:
+                            styles.append(bg)
+                    return styles
+
                 edited_df = st.data_editor(
-                    pd.DataFrame(grid_seed),
+                    df_man_seed.style.apply(_style_man_grid, axis=1),
                     use_container_width=True,
                     hide_index=True,
-                    disabled=["التاريخ", "الإجازة", "تأخير دخول", "مبكر انصراف", "إضافي انصراف"],
+                    disabled=["التاريخ", "الحالة / الإجازة", "تأخير دخول", "إضافي دخول", "انصراف مبكر", "إضافة انصراف"],
                     column_config={
-                        "check_in": st.column_config.TextColumn(
-                            "دخول check_in (مثال 09:00)",
-                            help="اكتب وقت الحضور بصيغة HH:MM مثل 09:00",
-                        ),
-                        "check_out": st.column_config.TextColumn(
-                            "انصراف check_out (مثال 17:00)",
-                            help="اكتب وقت الانصراف بصيغة HH:MM مثل 17:00",
-                        ),
+                        "التاريخ": st.column_config.TextColumn("التاريخ", width="small"),
+                        "الحالة / الإجازة": st.column_config.TextColumn("الحالة / الإجازة", width="medium"),
+                        "دخول": st.column_config.TextColumn("دخول (09:00)", width="small"),
+                        "انصراف": st.column_config.TextColumn("انصراف (17:00)", width="small"),
+                        "تأخير دخول": st.column_config.NumberColumn("تأخير دخول", width="small"),
+                        "إضافي دخول": st.column_config.NumberColumn("إضافي دخول", width="small"),
+                        "انصراف مبكر": st.column_config.NumberColumn("انصراف مبكر", width="small"),
+                        "إضافة انصراف": st.column_config.NumberColumn("إضافة انصراف", width="small"),
                     },
                     key=f"manual_att_editor_{man_emp_id}_{man_ym}",
                 )
@@ -2013,13 +2126,18 @@ def render_attendance_and_payroll(
                     s_start = str(man_emp.get("work_start_time") or "09:00:00")
                     s_end = str(man_emp.get("work_end_time") or "17:00:00")
                     saved_man = 0
+                    blocked_attempts: List[str] = []
                     invalid_rows: List[str] = []
 
                     for _, row_item in edited_df.iterrows():
                         d_iso = str(row_item.get("التاريخ") or "").strip()
-                        raw_cin = str(row_item.get("check_in") or "").strip()
-                        raw_cout = str(row_item.get("check_out") or "").strip()
+                        raw_cin = str(row_item.get("دخول") or "").strip()
+                        raw_cout = str(row_item.get("انصراف") or "").strip()
                         if not raw_cin and not raw_cout:
+                            continue
+
+                        if d_iso in blocked_iso_set:
+                            blocked_attempts.append(d_iso)
                             continue
 
                         cin_norm = _normalize_time_text(raw_cin) if raw_cin else None
@@ -2061,9 +2179,13 @@ def render_attendance_and_payroll(
                         )
                         saved_man += 1
 
+                    if blocked_attempts:
+                        st.error(
+                            f"🚫 غير مسموح بإدخال بصمة في أيام الجمعة أو الإجازات ({', '.join(blocked_attempts)})."
+                        )
                     if invalid_rows:
                         st.warning(
-                            f"⚠️ لم يتم حفظ التواريخ التالية بسبب صيغة وقت غير صحيحة ({', '.join(invalid_rows)}) — يرجى الكتابة بصيغة HH:MM مثل 09:00 و 17:00."
+                            f"⚠️ صيغة وقت غير صحيحة في التواريخ ({', '.join(invalid_rows)}) — استخدم HH:MM مثل 09:00 و 17:00."
                         )
 
                     if saved_man > 0:
@@ -2121,7 +2243,7 @@ def render_attendance_and_payroll(
                 st.info("لا توجد سجلات وقت إضافي مطابقة للفلاتر المختارة.")
         t_idx += 1
 
-    # --- 4) شيت المرتب (لجميع الموظفين — بطاقة مرتب شخصية مبسطة وأنيقة) ---
+    # --- 4) شيت المرتب (لجميع الموظفين) ---
     with tabs[t_idx]:
         st.markdown("#### 💵 شيت المرتب الشهري الخاص بي")
         my_pay_ym = st.text_input("شهر المرتب (YYYY-MM)", value=date.today().strftime("%Y-%m"), key="my_pay_sheet_ym")
@@ -2278,7 +2400,7 @@ def render_attendance_and_payroll(
         )
     t_idx += 1
 
-    # --- 5) شيت المرتبات (للمدير المباشر و HR والمدير العام فقط + إجمالي عام في الأسفل) ---
+    # --- 5) شيت المرتبات (للمدير المباشر و HR والمدير العام فقط) ---
     if can_view_all_payroll_sheet and t_idx < len(tabs):
         with tabs[t_idx]:
             st.markdown("#### 📊 شيت المرتبات الشهري والأرشيف")
@@ -2287,7 +2409,6 @@ def render_attendance_and_payroll(
             if user_role in ("general_manager", "hr") or perms.get("manage_payroll"):
                 target_payroll_emps = [e for e in employees if (e.get("status") or "active") == "active"]
             else:
-                # المدير المباشر: يرى الموظفين التابعين له تحت سلطته
                 target_payroll_emps = _get_subordinate_employees(current_user, employees)
 
             computed_list = []
@@ -2880,7 +3001,7 @@ def render_admin_and_staff(
                     st.rerun()
 
         st.divider()
-        st.markdown("#### 🎉 الإجازات الرسمية المصرية والمرتبات")
+        st.markdown("#### 🎉 الإجازات الرسمية المصرية والمرتبات (من تاريخ إلى تاريخ)")
         if perms.get("manage_settings") or perms.get("manage_payroll") or user_role in ("general_manager", "hr"):
             picked_eg_holiday = st.selectbox(
                 "اختر إجازة رسمية من إجازات مصر (أو إجازة مخصصة)",
@@ -2889,32 +3010,53 @@ def render_admin_and_staff(
             )
             default_h_name = "" if picked_eg_holiday == "إجازة رسمية أخرى (مخصصة)" else picked_eg_holiday
 
+            h_d1, h_d2, h_d3 = st.columns(3)
+            with h_d1:
+                h_start = st.date_input("من تاريخ", value=date.today(), key="hol_from_dt_inp")
+            with h_d2:
+                h_end = st.date_input("إلى تاريخ", value=date.today(), key="hol_to_dt_inp")
+            hol_days_cnt = int((h_end - h_start).days + 1) if (h_start and h_end and h_end >= h_start) else 0
+            with h_d3:
+                st.text_input("عدد الأيام", value=str(hol_days_cnt), disabled=True, key=f"hol_days_calc_{hol_days_cnt}")
+
             with st.form("add_holiday_form", clear_on_submit=True):
-                c1, c2, c3 = st.columns(3)
+                c1, c2 = st.columns([2.5, 1.5])
                 with c1:
                     h_name = st.text_input("اسم الإجازة الرسمية", value=default_h_name, placeholder="اكتب اسم الإجازة")
                 with c2:
-                    h_date = st.date_input("تاريخ الإجازة", value=date.today())
-                with c3:
-                    add_day = st.checkbox("تُضاف للمرتبات (+يوم إضافي)", value=False)
+                    add_day = st.checkbox("تُضاف للمرتبات (+يوم لكل يوم)", value=False)
+
                 if st.form_submit_button("إضافة إجازة رسمية", type="primary"):
                     final_h_name = h_name.strip() or ("" if picked_eg_holiday == "إجازة رسمية أخرى (مخصصة)" else picked_eg_holiday)
-                    if final_h_name:
+                    if not final_h_name:
+                        st.error("يرجى إدخال اسم الإجازة الرسمية.")
+                    elif hol_days_cnt <= 0:
+                        st.error("تاريخ النهاية يجب أن يكون مساوياً أو بعد تاريخ البداية.")
+                    else:
                         insert_record("official_holidays", {
-                            "holiday_date": h_date.isoformat(),
-                            "holiday_year": str(h_date.year),
+                            "holiday_date": h_start.isoformat(),
+                            "start_date": h_start.isoformat(),
+                            "end_date": h_end.isoformat(),
+                            "days_count": int(hol_days_cnt),
+                            "holiday_year": str(h_start.year),
                             "name_ar": final_h_name,
                             "add_day_to_payroll": bool(add_day),
                             "active": True,
                         })
-                        st.success("✅ تمت إضافة الإجازة الرسمية.")
+                        st.success(f"✅ تمت إضافة ({final_h_name}) لمدة {hol_days_cnt} يوم.")
                         st.rerun()
 
         if holidays_list:
             for hol in holidays_list:
+                s_p, e_p, d_cnt = _get_holiday_period_bounds(hol)
+                date_rng_txt = (
+                    f"من `{s_p.isoformat()}` إلى `{e_p.isoformat()}` (**{d_cnt} يوم**)"
+                    if (s_p and e_p and s_p != e_p)
+                    else f"`{str(hol.get('holiday_date') or s_p or '')[:10]}` (**{d_cnt} يوم**)"
+                )
                 with st.container(border=True):
-                    c1, c2, c3 = st.columns([3, 2, 1])
-                    c1.write(f"**{hol.get('name_ar')}** — `{str(hol.get('holiday_date'))[:10]}`")
+                    c1, c2, c3 = st.columns([3.5, 1.8, 1])
+                    c1.write(f"**{hol.get('name_ar')}** — {date_rng_txt}")
                     flag_val = bool(hol.get("add_day_to_payroll", False))
                     if perms.get("manage_settings") or perms.get("manage_payroll") or user_role in ("general_manager", "hr"):
                         new_flag = c2.checkbox("إضافة يوم للمرتبات", value=flag_val, key=f"hol_chk_{hol['id']}")
