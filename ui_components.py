@@ -133,6 +133,37 @@ def _get_subordinate_employees(
     return subordinates
 
 
+def _filter_visible_advances(
+    current_user: Dict[str, Any],
+    employees: List[Dict[str, Any]],
+    advances: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    تصفية سجل السلف:
+    - المدير العام / رئيس مجلس الإدارة / نائب الرئيس / HR: يرون الكل.
+    - المدير المباشر: يرى السلف الخاصة بالموظفين الذين تحت اسمه/سلطته فقط.
+    - باقي الموظفين (بما فيهم الـ Senior): يرون السلف الخاصة بهم فقط.
+    """
+    user_role = (current_user.get("role") or "employee").strip().lower()
+    if user_role in ("general_manager", "chairman", "vice_chairman", "hr"):
+        return advances
+
+    my_ids = _emp_identifiers(current_user)
+    if user_role == "manager":
+        allowed_ids = set(my_ids)
+        for se in _get_subordinate_employees(current_user, employees):
+            allowed_ids.update(_emp_identifiers(se))
+        return [
+            adv for adv in advances
+            if str(adv.get("employee_id") or "") in allowed_ids
+        ]
+
+    return [
+        adv for adv in advances
+        if str(adv.get("employee_id") or "") in my_ids
+    ]
+
+
 def _filter_visible_penalties_rewards(
     current_user: Dict[str, Any],
     employees: List[Dict[str, Any]],
@@ -170,6 +201,7 @@ def get_pending_items_bundle(
     penalties_rewards: List[Dict[str, Any]],
     advances: List[Dict[str, Any]],
     attendance_logs: List[Dict[str, Any]],
+    employees: List[Dict[str, Any]] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
     perms = get_effective_permissions(current_user)
     if perms.get("is_monitor_only"):
@@ -177,7 +209,13 @@ def get_pending_items_bundle(
 
     user_ids = _emp_identifiers(current_user)
     user_role = (current_user.get("role") or "employee").lower()
+    all_emps = employees or []
+    emp_by_any_id: Dict[str, Dict[str, Any]] = {}
+    for e in all_emps:
+        for k in _emp_identifiers(e):
+            emp_by_any_id[k] = e
 
+    # 1. موافقات الإجازات
     pending_leaves: List[Dict[str, Any]] = []
     for lr in leave_requests:
         st_val = (lr.get("status") or "").lower()
@@ -196,6 +234,7 @@ def get_pending_items_bundle(
             elif st_val == "pending_manager" and str(lr.get("direct_manager_id") or "") in user_ids:
                 pending_leaves.append(lr)
 
+    # 2. موافقات الجزاءات والمكافآت
     pending_pr: List[Dict[str, Any]] = []
     if perms.get("approve_penalties") or perms.get("approve_rewards"):
         for pr in penalties_rewards:
@@ -209,15 +248,27 @@ def get_pending_items_bundle(
             elif etype == "penalty" and perms.get("approve_penalties"):
                 pending_pr.append(pr)
 
+    # 3. موافقات السلف (للمدير المباشر للموظفين التابعين له فقط، ثم للمدير العام)
     pending_adv: List[Dict[str, Any]] = []
-    if perms.get("approve_advances"):
+    if perms.get("approve_advances") and user_role in ("manager", "general_manager"):
         for adv in advances:
             st_val = (adv.get("status") or "").lower()
+            req_emp_id = str(adv.get("employee_id") or "")
+            req_emp_obj = emp_by_any_id.get(req_emp_id, {})
+            req_mgr_id = str(req_emp_obj.get("direct_manager_id") or "")
+            same_dept = (
+                bool(current_user.get("department_id"))
+                and bool(req_emp_obj.get("department_id"))
+                and str(req_emp_obj.get("department_id")) == str(current_user.get("department_id"))
+            )
+            is_my_subordinate = (req_mgr_id in user_ids) or same_dept
+
             if user_role == "general_manager" and st_val in ("pending", "manager_approved"):
                 pending_adv.append(adv)
-            elif user_role in ("manager", "hr") and st_val == "pending":
+            elif user_role == "manager" and st_val == "pending" and is_my_subordinate:
                 pending_adv.append(adv)
 
+    # 4. موافقات الوقت الإضافي
     pending_ot: List[Dict[str, Any]] = []
     if perms.get("approve_overtime"):
         for att in attendance_logs:
@@ -243,9 +294,12 @@ def get_pending_approvals_count(
     penalties_rewards: List[Dict[str, Any]],
     advances: List[Dict[str, Any]],
     attendance_logs: List[Dict[str, Any]],
+    employees: List[Dict[str, Any]] = None,
 ) -> int:
     """إجمالي عدد الإشعارات المعلقة على زر الموافقات الرئيسي."""
-    bundle = get_pending_items_bundle(current_user, leave_requests, penalties_rewards, advances, attendance_logs)
+    bundle = get_pending_items_bundle(
+        current_user, leave_requests, penalties_rewards, advances, attendance_logs, employees=employees
+    )
     return (
         len(bundle["leaves"])
         + len(bundle["pr"])
@@ -452,7 +506,9 @@ def render_approvals_inbox(
         st.info("حساب رئيس مجلس الإدارة / نائب الرئيس مخصص للمتابعة والاطلاع فقط بدون صلاحية موافقات.")
         return
 
-    bundle = get_pending_items_bundle(current_user, leave_requests, penalties_rewards, advances, attendance_logs)
+    bundle = get_pending_items_bundle(
+        current_user, leave_requests, penalties_rewards, advances, attendance_logs, employees=employees
+    )
     total_pending = (
         len(bundle["leaves"])
         + len(bundle["pr"])
@@ -630,7 +686,11 @@ def render_approvals_inbox(
             emp_o = emp_by_id.get(str(adv.get("employee_id") or ""), {})
             st_val = (adv.get("status") or "").lower()
             with st.container(border=True):
-                mode_ar = "خصم كامل في نفس الشهر" if adv.get("repayment_mode") == "single_month" else f"تقسيط على {adv.get('installments_count')} شهر"
+                mode_ar = (
+                    "خصم كامل في نفس الشهر"
+                    if adv.get("repayment_mode") == "single_month"
+                    else f"تقسيط على {adv.get('installments_count')} شهر"
+                )
                 st.write(
                     f"**{emp_o.get('name_ar', '')}** — الإجمالي: `{adv.get('total_amount')} ج` | "
                     f"النظام: `{mode_ar}` (قسط `{adv.get('monthly_installment')} ج`) | "
@@ -640,8 +700,8 @@ def render_approvals_inbox(
                     st.caption(f"السبب: {adv.get('reason')}")
                 ca, cr, _ = st.columns([1.4, 1.2, 4.4])
                 with ca:
-                    if st_val == "pending" and user_role in ("manager", "hr"):
-                        if st.button("✅ موافقة إدارية", key=f"unif_mgr_adv_{adv['id']}", type="primary"):
+                    if st_val == "pending" and user_role == "manager":
+                        if st.button("✅ موافقة مدير مباشر", key=f"unif_mgr_adv_{adv['id']}", type="primary"):
                             update_record("advances", adv["id"], {
                                 "status": "manager_approved",
                                 "manager_approved_at": datetime.utcnow().isoformat() + "Z",
@@ -1147,11 +1207,10 @@ def render_penalties_rewards_advances(
         else:
             st.info("لا توجد سجلات جزاءات أو مكافآت ضمن نطاق صلاحياتك حالياً.")
 
-    # --- التاب الثاني: طلبات السلف والتقسيط ---
     with tab_adv:
         st.markdown("#### تقديم طلب سلفة")
 
-        if rep_mode := st.selectbox(
+        rep_mode = st.selectbox(
             "نظام السداد",
             ["single_month", "installments_count"],
             format_func=lambda x: {
@@ -1159,8 +1218,7 @@ def render_penalties_rewards_advances(
                 "installments_count": "تقسيط على عدد الشهور",
             }[x],
             key="adv_repayment_mode_sel",
-        ):
-            pass
+        )
 
         if rep_mode == "installments_count":
             c1, c2, c3, c4 = st.columns(4)
@@ -1184,7 +1242,6 @@ def render_penalties_rewards_advances(
                 tot_amt = st.number_input("إجمالي السلفة (جنيه)", min_value=50.0, value=1000.0, step=50.0, key="adv_tot_amt_single")
             with c2:
                 start_ym = st.text_input("شهر بداية الخصم (YYYY-MM)", value=date.today().strftime("%Y-%m"), key="adv_start_ym_single")
-            inst_cnt = 1
             sched = calculate_advance_schedule(tot_amt, "single_month", 1, 0.0)
 
         preview_rows = _build_advance_installments_preview(
@@ -1228,7 +1285,8 @@ def render_penalties_rewards_advances(
                 st.rerun()
 
         st.markdown("#### سجل السلف وحالاتها")
-        if advances:
+        visible_advances = _filter_visible_advances(current_user, employees, advances)
+        if visible_advances:
             st.dataframe(
                 [
                     {
@@ -1241,11 +1299,13 @@ def render_penalties_rewards_advances(
                         "بداية الخصم": adv.get("start_payroll_month"),
                         "الحالة": adv.get("status"),
                     }
-                    for adv in advances
+                    for adv in visible_advances
                 ],
                 use_container_width=True,
                 hide_index=True,
             )
+        else:
+            st.info("لا توجد طلبات سلف مسجلة ضمن نطاق صلاحياتك حالياً.")
 
     with tab_hr_settle:
         st.markdown("#### تجميع سلف الموظف المستحقة للشهر وتأكيد السداد")
