@@ -57,6 +57,23 @@ def _sync_leave_days_state() -> None:
         st.session_state["calculated_leave_days"] = int((e - s).days + 1)
 
 
+def _add_months_ym(ym_str: str, offset_months: int) -> str:
+    """إضافة عدد من الشهور إلى شهر بصيغة YYYY-MM وإرجاع النتيجة بصيغة YYYY-MM."""
+    try:
+        parts = str(ym_str or "").strip()[:7].split("-")
+        yr = int(parts[0])
+        mo = int(parts[1])
+    except Exception:
+        today_dt = date.today()
+        yr = today_dt.year
+        mo = today_dt.month
+
+    total_months = (yr * 12 + (mo - 1)) + int(offset_months)
+    new_yr = total_months // 12
+    new_mo = (total_months % 12) + 1
+    return f"{new_yr:04d}-{new_mo:02d}"
+
+
 def _build_advance_installments_preview(
     total_amount: float,
     start_ym: str,
@@ -65,28 +82,72 @@ def _build_advance_installments_preview(
     last_installment_amount: float,
 ) -> List[Dict[str, Any]]:
     """إنشاء جدول معاينة مرتب بالشهور لأقساط السلفة."""
-    try:
-        parts = start_ym.strip()[:7].split("-")
-        yr = int(parts[0])
-        mo = int(parts[1])
-    except Exception:
-        today_dt = date.today()
-        yr = today_dt.year
-        mo = today_dt.month
-
     rows: List[Dict[str, Any]] = []
     for idx in range(1, max(1, int(installments_count)) + 1):
         amt = last_installment_amount if idx == int(installments_count) else monthly_installment
         rows.append({
             "رقم القسط": idx,
-            "الشهر": f"{yr:04d}-{mo:02d}",
+            "الشهر": _add_months_ym(start_ym, idx - 1),
             "قيمة القسط (ج)": amt,
         })
-        mo += 1
-        if mo > 12:
-            mo = 1
-            yr += 1
     return rows
+
+
+def _build_remaining_schedule_for_employee(
+    emp_id: str,
+    target_ym: str,
+    advances: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    حساب السلف المتبقية على مدار الشهور لموظف معين بدءاً من الشهر المستهدف:
+    يعرض إجمالي المتبقي، وجدولاً بالشهور وقيمة السلفة في كل شهر، وآخر شهر سداد.
+    """
+    monthly_totals: Dict[str, float] = {}
+    total_remaining_all = 0.0
+
+    for adv in advances:
+        if str(adv.get("employee_id") or "") != str(emp_id):
+            continue
+        st_val = (adv.get("status") or "").lower()
+        if st_val in ("rejected", "cancelled", "settled"):
+            continue
+
+        rem = round_half_up_2(float(adv.get("remaining_amount") or 0))
+        if rem <= 0:
+            continue
+
+        total_remaining_all = round_half_up_2(total_remaining_all + rem)
+        cnt = max(1, int(adv.get("installments_count") or 1))
+        m_inst = round_half_up_2(float(adv.get("monthly_installment") or rem))
+        l_inst = round_half_up_2(float(adv.get("last_installment_amount") or m_inst))
+        start_m = str(adv.get("start_payroll_month") or target_ym)[:7]
+
+        # توزيع المبلغ المتبقي على الأقساط المتبقية من بداية الشهر المستهدف أو من شهر بداية الخصم
+        base_m = max(start_m, target_ym[:7])
+        rem_left = rem
+        for idx in range(cnt):
+            if rem_left <= 0:
+                break
+            inst_amt = l_inst if (idx == cnt - 1 and l_inst > 0) else m_inst
+            inst_amt = min(inst_amt, rem_left)
+            ym_slot = _add_months_ym(base_m, idx)
+            monthly_totals[ym_slot] = round_half_up_2(monthly_totals.get(ym_slot, 0.0) + inst_amt)
+            rem_left = round_half_up_2(rem_left - inst_amt)
+
+    sorted_months = sorted(monthly_totals.keys())
+    schedule_rows = [
+        {
+            "الشهر": ym,
+            "قيمة القسط / السلفة (ج)": monthly_totals[ym],
+        }
+        for ym in sorted_months
+    ]
+    end_ym = sorted_months[-1] if sorted_months else "—"
+    return {
+        "total_remaining": total_remaining_all,
+        "schedule_rows": schedule_rows,
+        "end_month": end_ym,
+    }
 
 
 def _get_subordinate_employees(
@@ -215,7 +276,6 @@ def get_pending_items_bundle(
         for k in _emp_identifiers(e):
             emp_by_any_id[k] = e
 
-    # 1. موافقات الإجازات
     pending_leaves: List[Dict[str, Any]] = []
     for lr in leave_requests:
         st_val = (lr.get("status") or "").lower()
@@ -234,7 +294,6 @@ def get_pending_items_bundle(
             elif st_val == "pending_manager" and str(lr.get("direct_manager_id") or "") in user_ids:
                 pending_leaves.append(lr)
 
-    # 2. موافقات الجزاءات والمكافآت
     pending_pr: List[Dict[str, Any]] = []
     if perms.get("approve_penalties") or perms.get("approve_rewards"):
         for pr in penalties_rewards:
@@ -248,7 +307,6 @@ def get_pending_items_bundle(
             elif etype == "penalty" and perms.get("approve_penalties"):
                 pending_pr.append(pr)
 
-    # 3. موافقات السلف (للمدير المباشر للموظفين التابعين له فقط، ثم للمدير العام)
     pending_adv: List[Dict[str, Any]] = []
     if perms.get("approve_advances") and user_role in ("manager", "general_manager"):
         for adv in advances:
@@ -268,7 +326,6 @@ def get_pending_items_bundle(
             elif user_role == "manager" and st_val == "pending" and is_my_subordinate:
                 pending_adv.append(adv)
 
-    # 4. موافقات الوقت الإضافي
     pending_ot: List[Dict[str, Any]] = []
     if perms.get("approve_overtime"):
         for att in attendance_logs:
@@ -1080,13 +1137,18 @@ def render_penalties_rewards_advances(
     user_role = (current_user.get("role") or "employee").strip().lower()
     emp_by_id = {str(e["id"]): e for e in employees if e.get("id")}
 
-    tab_pr, tab_adv, tab_hr_settle = st.tabs([
-        "⚖️ الجزاءات والمكافآت",
-        "💳 طلبات السلف والتقسيط",
-        "🏦 تجميع وسداد السلف (HR)",
-    ])
+    can_view_hr_settle = user_role in ("hr", "general_manager")
 
-    with tab_pr:
+    tab_titles = [
+        "⚖️ الجزاءات والمكافآت",
+        "💳 تتبع السلف",
+    ]
+    if can_view_hr_settle:
+        tab_titles.append("🏦 تجميع وسداد السلف (HR)")
+
+    tabs = st.tabs(tab_titles)
+
+    with tabs[0]:
         can_create_pr = (
             user_role in ("general_manager", "manager", "senior")
             or perms.get("approve_penalties")
@@ -1207,7 +1269,8 @@ def render_penalties_rewards_advances(
         else:
             st.info("لا توجد سجلات جزاءات أو مكافآت ضمن نطاق صلاحياتك حالياً.")
 
-    with tab_adv:
+    # --- التاب الثاني: تتبع السلف للمستخدم (سلفه هو فقط + جدول الأقساط المتبقية بالشهور) ---
+    with tabs[1]:
         st.markdown("#### تقديم طلب سلفة")
 
         rep_mode = st.selectbox(
@@ -1284,77 +1347,101 @@ def render_penalties_rewards_advances(
                 st.success("✅ تم إرسال طلب السلفة إلى صندوق الموافقات الموحّد.")
                 st.rerun()
 
-        st.markdown("#### سجل السلف وحالاتها")
-        visible_advances = _filter_visible_advances(current_user, employees, advances)
-        if visible_advances:
+        st.divider()
+        st.markdown("#### سلفاتي حسب الشهر المستهدف والأقساط المتبقية")
+        track_ym = st.text_input("الشهر المستهدف (YYYY-MM)", value=date.today().strftime("%Y-%m"), key="adv_track_ym")
+        my_month_summ = get_employee_monthly_advances_summary(user_id, track_ym, advances)
+        st.metric(f"مستحق السلف لشهر {track_ym}", f"{round_half_up_2(my_month_summ['total_due']):,.2f} ج")
+
+        if my_month_summ["items"]:
             st.dataframe(
                 [
                     {
-                        "الموظف": emp_by_id.get(str(adv.get("employee_id") or ""), {}).get("name_ar", ""),
-                        "الإجمالي (ج)": adv.get("total_amount"),
-                        "المتبقي (ج)": adv.get("remaining_amount"),
-                        "نظام السداد": "خصم كامل في نفس الشهر" if adv.get("repayment_mode") == "single_month" else "تقسيط على عدد الشهور",
-                        "عدد الشهور": adv.get("installments_count"),
-                        "القسط الشهري": adv.get("monthly_installment"),
-                        "بداية الخصم": adv.get("start_payroll_month"),
-                        "الحالة": adv.get("status"),
+                        "رقم القسط": f"{sub['installment_no']}/{sub['installments_count']}",
+                        "قيمة المستحق في الشهر (ج)": sub["due_amount"],
                     }
-                    for adv in visible_advances
+                    for sub in my_month_summ["items"]
                 ],
                 use_container_width=True,
                 hide_index=True,
             )
         else:
-            st.info("لا توجد طلبات سلف مسجلة ضمن نطاق صلاحياتك حالياً.")
+            st.info(f"لا توجد سلف مستحقة عليك في شهر {track_ym}.")
 
-    with tab_hr_settle:
-        st.markdown("#### تجميع سلف الموظف المستحقة للشهر وتأكيد السداد")
-        settle_month = st.text_input("الشهر المستهدف للتجميع والسداد (YYYY-MM)", value=date.today().strftime("%Y-%m"), key="hr_adv_ym")
-        can_settle = perms.get("manage_payroll") or user_role in ("hr", "general_manager")
+        rem_info = _build_remaining_schedule_for_employee(user_id, track_ym, advances)
+        st.markdown("#### السلف المتبقية على مدار الشهور")
+        rm1, rm2 = st.columns(2)
+        rm1.metric("إجمالي السلف المتبقية عليك", f"{rem_info['total_remaining']:,.2f} ج")
+        rm2.metric("تاريخ الانتهاء المتوقع من السلف", rem_info["end_month"])
 
-        rows_summary = []
-        for emp in employees:
-            summ = get_employee_monthly_advances_summary(str(emp["id"]), settle_month, advances)
-            if summ["total_due"] > 0:
-                rows_summary.append({"emp": emp, "summ": summ})
-
-        if not rows_summary:
-            st.info(f"لا توجد سلف مستحقة مجمّعة لشهر {settle_month}.")
+        if rem_info["schedule_rows"]:
+            st.dataframe(rem_info["schedule_rows"], use_container_width=True, hide_index=True)
         else:
-            for item in rows_summary:
-                emp = item["emp"]
-                summ = item["summ"]
-                with st.container(border=True):
-                    st.write(
-                        f"**{emp.get('name_ar')} (#{emp.get('employee_no')})** — "
-                        f"إجمالي المستحق للشهر: **`{summ['total_due']} ج`** "
-                        f"(عدد البنود المجمّعة: {len(summ['items'])})"
-                    )
-                    for sub in summ["items"]:
-                        st.caption(f"• سلفة `{sub['advance_id'][:8]}` — قسط {sub['installment_no']}/{sub['installments_count']}: {sub['due_amount']} ج")
+            st.success("لا توجد أقساط سلف متبقية عليك.")
 
-                    if can_settle and st.button("✔️ تم التسديد في السلف", key=f"settle_btn_{emp['id']}_{settle_month}", type="primary"):
-                        for sub in summ["items"]:
-                            adv_rec = next((a for a in advances if str(a["id"]) == str(sub["advance_id"])), None)
-                            if adv_rec:
-                                new_rem = round_half_up_2(max(0.0, float(adv_rec.get("remaining_amount") or 0) - float(sub["due_amount"])))
-                                new_status = "settled" if new_rem <= 0 else adv_rec.get("status")
-                                update_record("advances", adv_rec["id"], {
-                                    "remaining_amount": new_rem,
-                                    "status": new_status,
-                                    "settled_at": datetime.utcnow().isoformat() + "Z" if new_rem <= 0 else adv_rec.get("settled_at"),
-                                    "settled_by": user_id if new_rem <= 0 else adv_rec.get("settled_by"),
-                                })
-                        write_audit_log(
-                            "advances",
-                            "settle_monthly_advances",
-                            "سداد",
-                            f"تأكيد سداد سلف شهر {settle_month} بقيمة {summ['total_due']} ج للموظف {emp.get('name_ar')}",
-                            by_name=current_user.get("name_ar", ""),
-                            by_user_id=user_id,
+    # --- التاب الثالث: تجميع وسداد السلف (لـ HR والمدير العام فقط) ---
+    if can_view_hr_settle and len(tabs) > 2:
+        with tabs[2]:
+            st.markdown("#### تجميع سلف الموظف المستحقة للشهر وتأكيد السداد")
+            fc1, fc2 = st.columns(2)
+            with fc1:
+                settle_month = st.text_input("الشهر المستهدف (YYYY-MM)", value=date.today().strftime("%Y-%m"), key="hr_adv_ym")
+            with fc2:
+                hr_emp_filter_opts = ["الكل"] + [
+                    f"{e.get('name_ar')} (#{e.get('employee_no')})"
+                    for e in employees
+                    if (e.get("status") or "active") == "active"
+                ]
+                sel_hr_emp = st.selectbox("اسم الموظف", hr_emp_filter_opts, key="hr_adv_emp_filter")
+
+            can_settle = perms.get("manage_payroll") or user_role in ("hr", "general_manager")
+
+            rows_summary = []
+            for emp in employees:
+                emp_lbl = f"{emp.get('name_ar')} (#{emp.get('employee_no')})"
+                if sel_hr_emp != "الكل" and emp_lbl != sel_hr_emp:
+                    continue
+                summ = get_employee_monthly_advances_summary(str(emp["id"]), settle_month, advances)
+                if summ["total_due"] > 0:
+                    rows_summary.append({"emp": emp, "summ": summ})
+
+            if not rows_summary:
+                st.info(f"لا توجد سلف مستحقة مجمّعة لشهر {settle_month} حسب الفلتر المختار.")
+            else:
+                for item in rows_summary:
+                    emp = item["emp"]
+                    summ = item["summ"]
+                    with st.container(border=True):
+                        st.write(
+                            f"**{emp.get('name_ar')} (#{emp.get('employee_no')})** — "
+                            f"إجمالي المستحق للشهر: **`{summ['total_due']} ج`** "
+                            f"(عدد البنود المجمّعة: {len(summ['items'])})"
                         )
-                        st.success(f"✅ تم تسجيل سداد سلف {emp.get('name_ar')} للشهر.")
-                        st.rerun()
+                        for sub in summ["items"]:
+                            st.caption(f"• سلفة `{sub['advance_id'][:8]}` — قسط {sub['installment_no']}/{sub['installments_count']}: {sub['due_amount']} ج")
+
+                        if can_settle and st.button("✔️ تم التسديد في السلف", key=f"settle_btn_{emp['id']}_{settle_month}", type="primary"):
+                            for sub in summ["items"]:
+                                adv_rec = next((a for a in advances if str(a["id"]) == str(sub["advance_id"])), None)
+                                if adv_rec:
+                                    new_rem = round_half_up_2(max(0.0, float(adv_rec.get("remaining_amount") or 0) - float(sub["due_amount"])))
+                                    new_status = "settled" if new_rem <= 0 else adv_rec.get("status")
+                                    update_record("advances", adv_rec["id"], {
+                                        "remaining_amount": new_rem,
+                                        "status": new_status,
+                                        "settled_at": datetime.utcnow().isoformat() + "Z" if new_rem <= 0 else adv_rec.get("settled_at"),
+                                        "settled_by": user_id if new_rem <= 0 else adv_rec.get("settled_by"),
+                                    })
+                            write_audit_log(
+                                "advances",
+                                "settle_monthly_advances",
+                                "سداد",
+                                f"تأكيد سداد سلف شهر {settle_month} بقيمة {summ['total_due']} ج للموظف {emp.get('name_ar')}",
+                                by_name=current_user.get("name_ar", ""),
+                                by_user_id=user_id,
+                            )
+                            st.success(f"✅ تم تسجيل سداد سلف {emp.get('name_ar')} للشهر.")
+                            st.rerun()
 
 
 # =====================================================================
