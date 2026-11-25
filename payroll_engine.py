@@ -65,6 +65,33 @@ def _parse_time_minutes(val: Any) -> Optional[int]:
     return None
 
 
+def determine_initial_overtime_status(employee: Optional[Dict[str, Any]]) -> str:
+    """
+    تحديد حالة بداية اعتماد الوقت الإضافي حسب التسلسل الوظيفي للموظف:
+    - إذا كان للموظف Senior مسجل: pending_senior (ثم مدير مباشر ثم مدير عام).
+    - إذا لم يكن له Senior ولكن له مدير مباشر: pending_manager (ثم مدير عام).
+    - إذا لم يكن له Senior ولا مدير مباشر: pending_gm.
+    """
+    emp = employee or {}
+    role = str(emp.get("role") or "employee").strip().lower()
+    if role == "general_manager":
+        return "approved"
+
+    has_senior = bool(str(emp.get("senior_id") or "").strip())
+    has_manager = bool(str(emp.get("direct_manager_id") or "").strip())
+
+    if role == "senior":
+        return "pending_manager" if has_manager else "pending_gm"
+    if role == "manager":
+        return "pending_gm"
+
+    if has_senior:
+        return "pending_senior"
+    if has_manager:
+        return "pending_manager"
+    return "pending_gm"
+
+
 def evaluate_attendance_record(
     check_in_val: Any,
     check_out_val: Any,
@@ -73,12 +100,13 @@ def evaluate_attendance_record(
     grace_late_minutes: int = 15,
     grace_early_minutes: int = 5,
     is_leave_day: bool = False,
+    employee: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     تقييم سجل البصمة اليومي مع خصم دقائق السماح من الإعدادات:
     - late_minutes: صافي دقائق التأخير بعد خصم سماح الحضور.
     - early_leave_minutes: صافي دقائق الانصراف المبكر بعد خصم سماح الانصراف.
-    - overtime_minutes: دقائق الوقت الإضافي بعد نهاية الدوام، وتبدأ بحالة pending_manager.
+    - overtime_minutes: دقائق الوقت الإضافي بعد نهاية الدوام، وتبدأ بالمرحلة الصحيحة حسب وجود Senior أو مدير مباشر.
     """
     if is_leave_day:
         return {
@@ -126,7 +154,7 @@ def evaluate_attendance_record(
                 early_leave_minutes = int(raw_early - early_grace)
         elif work_cout_m > sched_end_m:
             overtime_minutes = int(work_cout_m - sched_end_m)
-            overtime_status = "pending_manager"
+            overtime_status = determine_initial_overtime_status(employee)
 
     return {
         "late_minutes": late_minutes,
@@ -251,7 +279,7 @@ def compute_employee_monthly_payroll(
     grace_early_minutes: int = 5,
 ) -> Dict[str, Any]:
     """
-    حساب المرتب الشهري الفعلي للموظف مع تطبيق السماح من الإعدادات:
+    حساب المرتب الشهري الفعلي للموظف (لكل الموظفين بلا استثناء):
     - المرتب الأساسي + إجازات رسمية (+يوم لكل إجازة مفعّلة) + المكافآت المعتمدة + الوقت الإضافي المعتمد
     - ناقص: خصم السلف المستحقة للشهر + الجزاءات المعتمدة + خصم التأخير والانصراف المبكر (بعد خصم السماح).
     """
@@ -320,13 +348,15 @@ def compute_employee_monthly_payroll(
     for att in attendance_logs:
         if str(att.get("employee_id") or "") not in emp_ids:
             continue
+        w_dt = _parse_dt_date(att.get("work_date"))
         w_ym = str(att.get("work_date") or "")[:7]
-        if w_ym != ym:
+        in_period = (w_ym == ym) or bool(w_dt and (cycle_start <= w_dt <= cycle_end))
+        if not in_period:
             continue
 
         ot_mins = int(att.get("overtime_minutes") or 0)
         ot_st = (att.get("overtime_status") or "").strip().lower()
-        if ot_mins > 0 and ot_st in ("approved", "gm_approved"):
+        if ot_mins > 0 and ot_st == "approved":
             approved_ot_minutes += ot_mins
 
         has_times = bool(att.get("check_in") or att.get("check_out"))
@@ -339,6 +369,7 @@ def compute_employee_monthly_payroll(
                 grace_late_minutes=late_grace,
                 grace_early_minutes=early_grace,
                 is_leave_day=False,
+                employee=employee,
             )
             deductible_late_and_early_minutes += int(ev["late_minutes"]) + int(ev["early_leave_minutes"])
         else:
@@ -424,7 +455,7 @@ def build_employee_period_summary(
             total_late_minutes += lm
         ot_m = int(att.get("overtime_minutes") or 0)
         ot_s = (att.get("overtime_status") or "").strip().lower()
-        if ot_m > 0 and ot_s in ("approved", "gm_approved"):
+        if ot_m > 0 and ot_s == "approved":
             approved_overtime_minutes += ot_m
 
     total_rewards = 0.0
