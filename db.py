@@ -87,13 +87,26 @@ def insert_record(table_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def update_record(table_name: str, record_id: Any, updates: Dict[str, Any]) -> Dict[str, Any]:
-    """تحديث سجل قائم عبر المعرف id."""
-    updates_with_ts = {
+    """تحديث سجل قائم عبر المعرف id مع تجاهل أي عمود غير موجود تلقائياً."""
+    client = get_supabase_client()
+    working_updates = {
         **updates,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
-    client = get_supabase_client()
-    response = client.table(table_name).update(updates_with_ts).eq("id", record_id).execute()
+
+    for _ in range(10):
+        try:
+            response = client.table(table_name).update(working_updates).eq("id", record_id).execute()
+            clear_data_cache()
+            return response.data[0] if response.data else {}
+        except Exception as exc:
+            missing_col = _extract_missing_column(str(exc))
+            if missing_col and missing_col in working_updates:
+                working_updates.pop(missing_col, None)
+                continue
+            raise
+
+    response = client.table(table_name).update(working_updates).eq("id", record_id).execute()
     clear_data_cache()
     return response.data[0] if response.data else {}
 
@@ -111,19 +124,25 @@ def upsert_record(
     payload: Dict[str, Any],
     on_conflict: str = "id",
 ) -> Dict[str, Any]:
-    """إضافة أو تحديث سجل بناءً على عمود التعارض المحدد."""
-    payload_with_ts = {
-        **payload,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }
+    """
+    إضافة أو تحديث سجل بشكل مضمون حتى بدون وجود قيد UNIQUE مركب في قاعدة البيانات:
+    يفحص أولاً السجل المطابق لأعمدة on_conflict، فإن وُجد يحدّثه، وإلا يضيف سجلاً جديداً.
+    """
     client = get_supabase_client()
-    response = (
-        client.table(table_name)
-        .upsert(payload_with_ts, on_conflict=on_conflict)
-        .execute()
-    )
-    clear_data_cache()
-    return response.data[0] if response.data else {}
+    conflict_cols = [c.strip() for c in (on_conflict or "id").split(",") if c.strip()]
+    can_lookup = all(col in payload and payload[col] is not None for col in conflict_cols)
+
+    if can_lookup:
+        query = client.table(table_name).select("id").limit(1)
+        for col in conflict_cols:
+            query = query.eq(col, payload[col])
+        existing_res = query.execute()
+        if existing_res.data:
+            existing_id = existing_res.data[0]["id"]
+            updates = {k: v for k, v in payload.items() if k != "id"}
+            return update_record(table_name, existing_id, updates)
+
+    return insert_record(table_name, payload)
 
 
 def upload_attachment(file_bytes: bytes, filename: str, content_type: str = "application/octet-stream") -> Optional[str]:
