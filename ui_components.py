@@ -29,6 +29,22 @@ from rules_engine import (
     validate_leave_request,
 )
 
+EGYPT_OFFICIAL_HOLIDAYS: List[str] = [
+    "عيد الميلاد المجيد",
+    "عيد الشرطة / ثورة 25 يناير",
+    "عيد الفطر المبارك",
+    "شم النسيم",
+    "عيد تحرير سيناء",
+    "عيد العمال",
+    "عيد الأضحى المبارك",
+    "رأس السنة الهجرية",
+    "ثورة 30 يونيو",
+    "عيد الثورة (23 يوليو)",
+    "المولد النبوي الشريف",
+    "عيد القوات المسلحة (6 أكتوبر)",
+    "إجازة رسمية أخرى (مخصصة)",
+]
+
 
 def _dept_map(departments: List[Dict[str, Any]]) -> Dict[str, str]:
     return {str(d["id"]): d.get("name", "") for d in departments if d.get("id")}
@@ -103,9 +119,9 @@ def _compute_attendance_breakdown(
 ) -> Dict[str, int]:
     """
     تفصيل الحضور والانصراف بعد خصم السماح المقرر من الإعدادات:
-    - تأخير دخول (دقيقة): صافي التأخير بعد خصم سماح الحضور (مثال: 16 - 15 = 1).
+    - تأخير دخول (دقيقة): صافي التأخير بعد خصم سماح الحضور.
     - مبكر دخول (دقيقة): دقائق الحضور قبل بداية الدوام.
-    - مبكر انصراف (دقيقة): صافي الانصراف المبكر بعد خصم سماح الانصراف (مثال: 10 - 5 = 5).
+    - مبكر انصراف (دقيقة): صافي الانصراف المبكر بعد خصم سماح الانصراف.
     - إضافي انصراف (دقيقة): دقائق العمل بعد نهاية الدوام.
     """
     s_start_m = _to_minutes_from_any_time(rec.get("scheduled_start") or emp.get("work_start_time") or "09:00:00")
@@ -161,10 +177,7 @@ def _compute_attendance_breakdown(
 
 
 def _normalize_time_text(raw_val: Any) -> Optional[str]:
-    """
-    تنظيف وتحويل أي صيغة وقت مقبولة (مثل 9:00 أو 09:00 أو 09:00:00) إلى HH:MM:SS.
-    تُرجع None إذا كانت القيمة فارغة أو غير صالحة.
-    """
+    """تنظيف وتحويل أي صيغة وقت مقبولة (مثل 9:00 أو 09:00 أو 09:00:00) إلى HH:MM:SS."""
     if raw_val is None:
         return None
     s = str(raw_val).strip()
@@ -212,10 +225,7 @@ def _add_months_ym(ym_str: str, offset_months: int) -> str:
 
 
 def _get_cycle_dates_for_month(ym_str: str) -> List[date]:
-    """
-    إرجاع قائمة التواريخ الكاملة للشهر الإداري:
-    من يوم 21 في الشهر السابق حتى يوم 20 في الشهر المختار (YYYY-MM).
-    """
+    """إرجاع قائمة التواريخ الكاملة للشهر الإداري (من 21 الشهر السابق إلى 20 الشهر المختار)."""
     try:
         parts = str(ym_str or "").strip()[:7].split("-")
         yr = int(parts[0])
@@ -1693,7 +1703,7 @@ def render_penalties_rewards_advances(
 
 
 # =====================================================================
-# 5. البصمة والـ Payroll (سحب السماح تلقائياً من org_settings)
+# 5. البصمة والـ Payroll (سجل الوقت الإضافي للـ HR والمدير العام فقط + فلاتر)
 # =====================================================================
 def render_attendance_and_payroll(
     current_user: Dict[str, Any],
@@ -1720,6 +1730,7 @@ def render_attendance_and_payroll(
     grace_early = int(org_settings.get("grace_early_minutes") if org_settings.get("grace_early_minutes") is not None else 5)
 
     can_upload_att = user_role in ("general_manager", "hr") or perms.get("manage_payroll")
+    can_view_ot_log = user_role in ("general_manager", "hr") or perms.get("manage_payroll")
 
     att_by_emp_date: Dict[tuple, Dict[str, Any]] = {}
     for rec in attendance_logs:
@@ -1731,10 +1742,9 @@ def render_attendance_and_payroll(
     tab_titles: List[str] = ["📋 شيت البصمة"]
     if can_upload_att:
         tab_titles.append("📥 رفع البصمة")
-    tab_titles.extend([
-        "🕒 سجل الوقت الإضافي",
-        "💵 شيت المرتب الفعلي والأرشيف",
-    ])
+    if can_view_ot_log:
+        tab_titles.append("🕒 سجل الوقت الإضافي")
+    tab_titles.append("💵 شيت المرتب الفعلي والأرشيف")
 
     tabs = st.tabs(tab_titles)
     t_idx = 0
@@ -2000,28 +2010,46 @@ def render_attendance_and_payroll(
                         st.rerun()
         t_idx += 1
 
-    with tabs[t_idx]:
-        st.markdown("#### سجل الوقت الإضافي (الاعتماد يتم من زر الموافقات الرئيسي)")
-        ot_records = [a for a in attendance_logs if int(a.get("overtime_minutes") or 0) > 0]
-        if ot_records:
-            st.dataframe(
-                [
-                    {
-                        "الموظف": emp_by_id.get(str(rec.get("employee_id") or ""), {}).get("name_ar", ""),
-                        "التاريخ": str(rec.get("work_date") or "")[:10],
-                        "الانصراف": rec.get("check_out"),
-                        "نهاية الدوام": rec.get("scheduled_end"),
-                        "الوقت الإضافي (دقيقة)": rec.get("overtime_minutes"),
-                        "حالة الاعتماد": rec.get("overtime_status"),
-                    }
-                    for rec in ot_records
-                ],
-                use_container_width=True,
-                hide_index=True,
-            )
-        else:
-            st.info("لا توجد سجلات وقت إضافي حتى الآن.")
-    t_idx += 1
+    if can_view_ot_log:
+        with tabs[t_idx]:
+            st.markdown("#### سجل الوقت الإضافي (للمدير العام و HR فقط)")
+            ot_fc1, ot_fc2 = st.columns(2)
+            with ot_fc1:
+                ot_filter_ym = st.text_input("فلتر بالشهر (YYYY-MM أو اكتب الكل)", value=date.today().strftime("%Y-%m"), key="ot_f_ym")
+            with ot_fc2:
+                ot_emp_opts = ["الكل"] + [
+                    f"{e.get('name_ar')} (#{e.get('employee_no')})"
+                    for e in employees
+                    if (e.get("status") or "active") == "active"
+                ]
+                sel_ot_emp = st.selectbox("فلتر باسم الموظف", ot_emp_opts, key="ot_f_emp")
+
+            ot_records = [a for a in attendance_logs if int(a.get("overtime_minutes") or 0) > 0]
+            ot_rows = []
+            ym_clean = ot_filter_ym.strip()[:7]
+            for rec in ot_records:
+                emp_o = emp_by_id.get(str(rec.get("employee_id") or ""), {})
+                emp_lbl = f"{emp_o.get('name_ar', '')} (#{emp_o.get('employee_no', '')})"
+                rec_ym = str(rec.get("work_date") or "")[:7]
+                if ym_clean and ym_clean.lower() not in ("الكل", "all") and rec_ym != ym_clean:
+                    continue
+                if sel_ot_emp != "الكل" and emp_lbl != sel_ot_emp:
+                    continue
+                ot_rows.append({
+                    "الموظف": emp_o.get("name_ar", ""),
+                    "الشهر": rec_ym,
+                    "التاريخ": str(rec.get("work_date") or "")[:10],
+                    "الانصراف": str(rec.get("check_out") or "")[:5],
+                    "نهاية الدوام": str(rec.get("scheduled_end") or "")[:5],
+                    "الوقت الإضافي (دقيقة)": rec.get("overtime_minutes"),
+                    "حالة الاعتماد": rec.get("overtime_status"),
+                })
+
+            if ot_rows:
+                st.dataframe(ot_rows, use_container_width=True, hide_index=True)
+            else:
+                st.info("لا توجد سجلات وقت إضافي مطابقة للفلاتر المختارة.")
+        t_idx += 1
 
     with tabs[t_idx]:
         st.markdown("#### شيت المرتب الشهري الفعلي والأرشيف")
@@ -2582,22 +2610,30 @@ def render_admin_and_staff(
                     st.rerun()
 
         st.divider()
-        st.markdown("#### 🎉 الإجازات الرسمية والمرتبات (إضافة يوم لكل إجازة مفعّلة)")
+        st.markdown("#### 🎉 الإجازات الرسمية المصرية والمرتبات")
         if perms.get("manage_settings") or perms.get("manage_payroll") or user_role in ("general_manager", "hr"):
+            picked_eg_holiday = st.selectbox(
+                "اختر إجازة رسمية من إجازات مصر (أو إجازة مخصصة)",
+                EGYPT_OFFICIAL_HOLIDAYS,
+                key="eg_holiday_preset_sel",
+            )
+            default_h_name = "" if picked_eg_holiday == "إجازة رسمية أخرى (مخصصة)" else picked_eg_holiday
+
             with st.form("add_holiday_form", clear_on_submit=True):
                 c1, c2, c3 = st.columns(3)
                 with c1:
-                    h_name = st.text_input("اسم الإجازة الرسمية", placeholder="مثال: عيد الفطر المبارك")
+                    h_name = st.text_input("اسم الإجازة الرسمية", value=default_h_name, placeholder="اكتب اسم الإجازة")
                 with c2:
                     h_date = st.date_input("تاريخ الإجازة", value=date.today())
                 with c3:
-                    add_day = st.checkbox("تُضاف للمرتبات (يوم إضافي لكل العاملين)", value=True)
+                    add_day = st.checkbox("تُضاف للمرتبات (+يوم إضافي)", value=False)
                 if st.form_submit_button("إضافة إجازة رسمية", type="primary"):
-                    if h_name.strip():
+                    final_h_name = h_name.strip() or ("" if picked_eg_holiday == "إجازة رسمية أخرى (مخصصة)" else picked_eg_holiday)
+                    if final_h_name:
                         insert_record("official_holidays", {
                             "holiday_date": h_date.isoformat(),
                             "holiday_year": str(h_date.year),
-                            "name_ar": h_name.strip(),
+                            "name_ar": final_h_name,
                             "add_day_to_payroll": bool(add_day),
                             "active": True,
                         })
@@ -2609,7 +2645,7 @@ def render_admin_and_staff(
                 with st.container(border=True):
                     c1, c2, c3 = st.columns([3, 2, 1])
                     c1.write(f"**{hol.get('name_ar')}** — `{str(hol.get('holiday_date'))[:10]}`")
-                    flag_val = bool(hol.get("add_day_to_payroll", True))
+                    flag_val = bool(hol.get("add_day_to_payroll", False))
                     if perms.get("manage_settings") or perms.get("manage_payroll") or user_role in ("general_manager", "hr"):
                         new_flag = c2.checkbox("إضافة يوم للمرتبات", value=flag_val, key=f"hol_chk_{hol['id']}")
                         if new_flag != flag_val:
