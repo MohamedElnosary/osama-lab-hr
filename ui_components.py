@@ -1797,7 +1797,7 @@ def render_penalties_rewards_advances(
 
 
 # =====================================================================
-# 5. البصمة والـ Payroll (تظليل الجمعة والأجازات + منع البصمة في أيامها + أسماء الأعمدة الجديدة)
+# 5. البصمة والـ Payroll (إيقاف حفظ بصمة الجمعة والأجازات ومنع تمريرها نهائياً)
 # =====================================================================
 def render_attendance_and_payroll(
     current_user: Dict[str, Any],
@@ -1847,7 +1847,6 @@ def render_attendance_and_payroll(
     tabs = st.tabs(tab_titles)
     t_idx = 0
 
-    # --- 1) شيت البصمة ---
     with tabs[t_idx]:
         st.markdown("#### شيت البصمة (الفترة من يوم 21 الشهر السابق إلى يوم 20 الشهر المختار)")
         sheet_ym = st.text_input("اختر الشهر (YYYY-MM)", value=date.today().strftime("%Y-%m"), key="att_sheet_ym")
@@ -1926,7 +1925,6 @@ def render_attendance_and_payroll(
         st.dataframe(df_my_sheet.style.apply(_style_my_sheet, axis=1), use_container_width=True, hide_index=True)
     t_idx += 1
 
-    # --- 2) رفع البصمة (للمدير العام و HR فقط) ---
     if can_upload_att:
         with tabs[t_idx]:
             st.markdown("#### رفع وإدخال البصمة (للمدير العام و HR فقط)")
@@ -1942,7 +1940,7 @@ def render_attendance_and_payroll(
                     f"الأعمدة المطلوبة: `employee_no`، `work_date` (مثال: `2026-11-05`)، "
                     f"`check_in` (مثال: `09:00`)، `check_out` (مثال: `17:00`) بنظام 24 ساعة — "
                     f"سماح الحضور: {grace_late} دقيقة | سماح الانصراف: {grace_early} دقيقة. "
-                    f"(يتم تجاهل أيام الجمعة والأجازات تلقائياً)."
+                    f"(يتم إيقاف بصمة أيام الجمعة والإجازات تلقائياً)."
                 )
                 att_file = st.file_uploader("رفع ملف البصمة", type=["xlsx", "xls", "csv"], key="att_excel_uploader")
                 if att_file is not None:
@@ -1954,66 +1952,73 @@ def render_attendance_and_payroll(
                     st.dataframe(df_att.head(25), use_container_width=True, hide_index=True)
 
                     if st.button("معالجة وحفظ سجلات البصمة في قاعدة البيانات", type="primary", key="save_uploaded_att_btn"):
-                        saved_cnt = 0
-                        skipped_days_cnt = 0
+                        blocked_upload_dates: List[str] = []
                         for _, r in df_att.iterrows():
                             eno = str(r.get("employee_no") or "").strip()
                             emp = emp_by_no.get(eno)
-                            if not emp:
-                                continue
                             w_dt = parse_date_safe(r.get("work_date"))
-                            if not w_dt:
-                                continue
+                            if emp and w_dt:
+                                emp_lv_map = _get_leave_map_for_employee(emp, all_leaves)
+                                if w_dt.weekday() == 4 or w_dt.isoformat() in emp_lv_map or w_dt.isoformat() in non_pay_holiday_map:
+                                    blocked_upload_dates.append(f"{eno} ({w_dt.isoformat()})")
 
-                            emp_lv_map = _get_leave_map_for_employee(emp, all_leaves)
-                            if w_dt.weekday() == 4 or w_dt.isoformat() in emp_lv_map or w_dt.isoformat() in non_pay_holiday_map:
-                                skipped_days_cnt += 1
-                                continue
-
-                            s_start = str(emp.get("work_start_time") or "09:00:00")
-                            s_end = str(emp.get("work_end_time") or "17:00:00")
-                            cin_norm = _normalize_time_text(r.get("check_in"))
-                            cout_norm = _normalize_time_text(r.get("check_out"))
-
-                            eval_res = evaluate_attendance_record(
-                                cin_norm or "",
-                                cout_norm or "",
-                                s_start,
-                                s_end,
-                                grace_late_minutes=grace_late,
-                                grace_early_minutes=grace_early,
-                                is_leave_day=False,
-                                employee=emp,
+                        if blocked_upload_dates:
+                            st.error(
+                                f"🚫 ممنوع تسجيل بصمة في أيام الجمعة أو الإجازات؛ تم إيقاف الحفظ لوجود: {', '.join(blocked_upload_dates)}. يرجى حذف هذه الأيام من الملف ثم إعادة المحاولة."
                             )
-                            upsert_record(
+                        else:
+                            saved_cnt = 0
+                            for _, r in df_att.iterrows():
+                                eno = str(r.get("employee_no") or "").strip()
+                                emp = emp_by_no.get(eno)
+                                if not emp:
+                                    continue
+                                w_dt = parse_date_safe(r.get("work_date"))
+                                if not w_dt:
+                                    continue
+                                s_start = str(emp.get("work_start_time") or "09:00:00")
+                                s_end = str(emp.get("work_end_time") or "17:00:00")
+                                cin_norm = _normalize_time_text(r.get("check_in"))
+                                cout_norm = _normalize_time_text(r.get("check_out"))
+
+                                eval_res = evaluate_attendance_record(
+                                    cin_norm or "",
+                                    cout_norm or "",
+                                    s_start,
+                                    s_end,
+                                    grace_late_minutes=grace_late,
+                                    grace_early_minutes=grace_early,
+                                    is_leave_day=False,
+                                    employee=emp,
+                                )
+                                upsert_record(
+                                    "attendance_logs",
+                                    {
+                                        "employee_id": emp["id"],
+                                        "work_date": w_dt.isoformat(),
+                                        "check_in": cin_norm,
+                                        "check_out": cout_norm,
+                                        "scheduled_start": s_start,
+                                        "scheduled_end": s_end,
+                                        "late_minutes": eval_res["late_minutes"],
+                                        "early_leave_minutes": eval_res["early_leave_minutes"],
+                                        "overtime_minutes": eval_res["overtime_minutes"],
+                                        "overtime_status": eval_res["overtime_status"],
+                                    },
+                                    on_conflict="employee_id,work_date",
+                                )
+                                saved_cnt += 1
+
+                            write_audit_log(
                                 "attendance_logs",
-                                {
-                                    "employee_id": emp["id"],
-                                    "work_date": w_dt.isoformat(),
-                                    "check_in": cin_norm,
-                                    "check_out": cout_norm,
-                                    "scheduled_start": s_start,
-                                    "scheduled_end": s_end,
-                                    "late_minutes": eval_res["late_minutes"],
-                                    "early_leave_minutes": eval_res["early_leave_minutes"],
-                                    "overtime_minutes": eval_res["overtime_minutes"],
-                                    "overtime_status": eval_res["overtime_status"],
-                                },
-                                on_conflict="employee_id,work_date",
+                                "upload_attendance",
+                                "استيراد",
+                                f"رفع ومعالجة {saved_cnt} سجل بصمة من الملف {att_file.name}",
+                                by_name=current_user.get("name_ar", ""),
+                                by_user_id=user_id,
                             )
-                            saved_cnt += 1
-
-                        write_audit_log(
-                            "attendance_logs",
-                            "upload_attendance",
-                            "استيراد",
-                            f"رفع ومعالجة {saved_cnt} سجل بصمة من الملف {att_file.name}",
-                            by_name=current_user.get("name_ar", ""),
-                            by_user_id=user_id,
-                        )
-                        extra_msg = f" (تم استبعاد {skipped_days_cnt} يوم جمعة/إجازة)" if skipped_days_cnt > 0 else ""
-                        st.success(f"✅ تم حفظ ومعالجة {saved_cnt} سجل بصمة بنجاح{extra_msg}.")
-                        st.rerun()
+                            st.success(f"✅ تم حفظ ومعالجة {saved_cnt} سجل بصمة بنجاح.")
+                            st.rerun()
 
             else:
                 mc1, mc2 = st.columns(2)
@@ -2037,20 +2042,24 @@ def render_attendance_and_payroll(
                 )
                 st.info(
                     "📌 **صيغة إدخال الوقت (نظام 24 ساعة HH:MM):** مثال للدخول: **`09:00`** | مثال للانصراف: **`17:00`** — "
-                    "🔴 أيام الجمعة والإجازات الرسمية غير المضافة مظللة بالأحمر ولا يُسمح فيها بالبصمة | "
-                    "🟡 أيام الإجازات مظللة بالأصفر ولا يُسمح فيها بالبصمة."
+                    "🔴 أيام الجمعة والإجازات الرسمية غير المضافة مظللة بالأحمر وممنوع تسجيل بصمة فيها | "
+                    "🟡 أيام الإجازات مظللة بالأصفر وممنوع تسجيل بصمة فيها."
                 )
 
                 grid_seed = []
-                blocked_iso_set = set()
+                blocked_reason_by_iso: Dict[str, str] = {}
                 for d_obj in man_days:
                     d_iso = d_obj.isoformat()
                     is_fri = d_obj.weekday() == 4
                     non_pay_hol_txt = non_pay_holiday_map.get(d_iso, "")
                     lv_label = man_leave_map.get(d_iso, "")
 
-                    if is_fri or bool(non_pay_hol_txt) or bool(lv_label):
-                        blocked_iso_set.add(d_iso)
+                    if is_fri:
+                        blocked_reason_by_iso[d_iso] = "يوم جمعة"
+                    elif non_pay_hol_txt:
+                        blocked_reason_by_iso[d_iso] = non_pay_hol_txt
+                    elif lv_label:
+                        blocked_reason_by_iso[d_iso] = lv_label
 
                     existing_rec: Dict[str, Any] = {}
                     for cid in man_emp_all_ids:
@@ -2078,8 +2087,8 @@ def render_attendance_and_payroll(
                     grid_seed.append({
                         "التاريخ": d_iso,
                         "الحالة / الإجازة": status_col,
-                        "دخول": "" if blocked_iso_set.__contains__(d_iso) else str(existing_rec.get("check_in") or "")[:5],
-                        "انصراف": "" if blocked_iso_set.__contains__(d_iso) else str(existing_rec.get("check_out") or "")[:5],
+                        "دخول": "" if d_iso in blocked_reason_by_iso else str(existing_rec.get("check_in") or "")[:5],
+                        "انصراف": "" if d_iso in blocked_reason_by_iso else str(existing_rec.get("check_out") or "")[:5],
                         "تأخير دخول": bd["late_in"],
                         "إضافي دخول": bd["early_in"],
                         "انصراف مبكر": bd["early_out"],
@@ -2125,9 +2134,10 @@ def render_attendance_and_payroll(
                 if st.button("💾 حفظ بصمات الشهر اليدوية", type="primary", key="save_manual_att_btn"):
                     s_start = str(man_emp.get("work_start_time") or "09:00:00")
                     s_end = str(man_emp.get("work_end_time") or "17:00:00")
-                    saved_man = 0
-                    blocked_attempts: List[str] = []
-                    invalid_rows: List[str] = []
+
+                    blocked_hits: List[str] = []
+                    invalid_hits: List[str] = []
+                    valid_to_save: List[Dict[str, Any]] = []
 
                     for _, row_item in edited_df.iterrows():
                         d_iso = str(row_item.get("التاريخ") or "").strip()
@@ -2136,15 +2146,15 @@ def render_attendance_and_payroll(
                         if not raw_cin and not raw_cout:
                             continue
 
-                        if d_iso in blocked_iso_set:
-                            blocked_attempts.append(d_iso)
+                        if d_iso in blocked_reason_by_iso:
+                            blocked_hits.append(f"{d_iso} ({blocked_reason_by_iso[d_iso]})")
                             continue
 
                         cin_norm = _normalize_time_text(raw_cin) if raw_cin else None
                         cout_norm = _normalize_time_text(raw_cout) if raw_cout else None
 
                         if (raw_cin and not cin_norm) or (raw_cout and not cout_norm):
-                            invalid_rows.append(d_iso)
+                            invalid_hits.append(d_iso)
                             continue
 
                         w_dt = parse_date_safe(d_iso)
@@ -2161,47 +2171,52 @@ def render_attendance_and_payroll(
                             is_leave_day=False,
                             employee=man_emp,
                         )
-                        upsert_record(
-                            "attendance_logs",
-                            {
-                                "employee_id": man_emp["id"],
-                                "work_date": w_dt.isoformat(),
-                                "check_in": cin_norm,
-                                "check_out": cout_norm,
-                                "scheduled_start": s_start,
-                                "scheduled_end": s_end,
-                                "late_minutes": eval_res["late_minutes"],
-                                "early_leave_minutes": eval_res["early_leave_minutes"],
-                                "overtime_minutes": eval_res["overtime_minutes"],
-                                "overtime_status": eval_res["overtime_status"],
-                            },
-                            on_conflict="employee_id,work_date",
-                        )
-                        saved_man += 1
+                        valid_to_save.append({
+                            "employee_id": man_emp["id"],
+                            "work_date": w_dt.isoformat(),
+                            "check_in": cin_norm,
+                            "check_out": cout_norm,
+                            "scheduled_start": s_start,
+                            "scheduled_end": s_end,
+                            "late_minutes": eval_res["late_minutes"],
+                            "early_leave_minutes": eval_res["early_leave_minutes"],
+                            "overtime_minutes": eval_res["overtime_minutes"],
+                            "overtime_status": eval_res["overtime_status"],
+                        })
 
-                    if blocked_attempts:
+                    if blocked_hits:
                         st.error(
-                            f"🚫 غير مسموح بإدخال بصمة في أيام الجمعة أو الإجازات ({', '.join(blocked_attempts)})."
+                            f"🚫 ممنوع تسجيل بصمة في الأيام التالية وتم إيقاف الحفظ بالكامل ولم يسمع شيء في الشيتات:\n"
+                            f"{' | '.join(blocked_hits)}\n"
+                            f"يرجى مسح القيم المدخلة/الملصوقة في هذه الأيام ثم الضغط على حفظ بصمات الشهر اليدوية."
                         )
-                    if invalid_rows:
-                        st.warning(
-                            f"⚠️ صيغة وقت غير صحيحة في التواريخ ({', '.join(invalid_rows)}) — استخدم HH:MM مثل 09:00 و 17:00."
+                    elif invalid_hits:
+                        st.error(
+                            f"⚠️ صيغة وقت غير صحيحة وتم إيقاف الحفظ في التواريخ: {', '.join(invalid_hits)} — يرجى الكتابة بصيغة HH:MM مثل 09:00 و 17:00."
                         )
+                    else:
+                        for rec_payload in valid_to_save:
+                            upsert_record(
+                                "attendance_logs",
+                                rec_payload,
+                                on_conflict="employee_id,work_date",
+                            )
 
-                    if saved_man > 0:
-                        write_audit_log(
-                            "attendance_logs",
-                            "manual_attendance",
-                            "تعديل",
-                            f"إدخال/تحديث {saved_man} سجل بصمة يدوياً للموظف {man_emp.get('name_ar')} لشهر {man_ym}",
-                            by_name=current_user.get("name_ar", ""),
-                            by_user_id=user_id,
-                        )
-                        st.success(f"✅ تم حفظ {saved_man} سجل بصمة للموظف {man_emp.get('name_ar')} بنجاح.")
-                        st.rerun()
+                        if valid_to_save:
+                            write_audit_log(
+                                "attendance_logs",
+                                "manual_attendance",
+                                "تعديل",
+                                f"إدخال/تحديث {len(valid_to_save)} سجل بصمة يدوياً للموظف {man_emp.get('name_ar')} لشهر {man_ym}",
+                                by_name=current_user.get("name_ar", ""),
+                                by_user_id=user_id,
+                            )
+                            st.success(f"✅ تم حفظ {len(valid_to_save)} سجل بصمة للموظف {man_emp.get('name_ar')} بنجاح.")
+                            st.rerun()
+                        else:
+                            st.info("لم يتم إدخال مواعيد جديدة لحفظها.")
         t_idx += 1
 
-    # --- 3) سجل الوقت الإضافي (للمدير العام و HR فقط) ---
     if can_view_ot_log:
         with tabs[t_idx]:
             st.markdown("#### سجل الوقت الإضافي (للمدير العام و HR فقط)")
@@ -2243,7 +2258,6 @@ def render_attendance_and_payroll(
                 st.info("لا توجد سجلات وقت إضافي مطابقة للفلاتر المختارة.")
         t_idx += 1
 
-    # --- 4) شيت المرتب (لجميع الموظفين) ---
     with tabs[t_idx]:
         st.markdown("#### 💵 شيت المرتب الشهري الخاص بي")
         my_pay_ym = st.text_input("شهر المرتب (YYYY-MM)", value=date.today().strftime("%Y-%m"), key="my_pay_sheet_ym")
@@ -2400,7 +2414,6 @@ def render_attendance_and_payroll(
         )
     t_idx += 1
 
-    # --- 5) شيت المرتبات (للمدير المباشر و HR والمدير العام فقط) ---
     if can_view_all_payroll_sheet and t_idx < len(tabs):
         with tabs[t_idx]:
             st.markdown("#### 📊 شيت المرتبات الشهري والأرشيف")
