@@ -38,6 +38,11 @@ def round_half_up_2(val: float) -> float:
     return float(Decimal(str(val)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
+def round_nearest_int(val: float) -> int:
+    """تقريب الرقم لأقرب عدد صحيح (مثال: 3.5 -> 4، و 3.4 -> 3)."""
+    return int(Decimal(str(val)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
 def get_effective_permissions(employee: Dict[str, Any]) -> Dict[str, bool]:
     """دمج الصلاحيات الافتراضية للدور مع التخصيصات الفردية للموظف/الـ Senior."""
     role = (employee.get("role") or "employee").strip().lower()
@@ -74,7 +79,6 @@ def get_effective_permissions(employee: Dict[str, Any]) -> Dict[str, bool]:
             "approve_overtime": True,
         })
     elif role == "senior":
-        # الـ Senior مسؤول عن تنظيم وموافقة الإجازات فقط افتراضياً، ويمكن منحه صلاحيات إضافية
         perms.update({
             "approve_leaves": True,
         })
@@ -88,6 +92,32 @@ def get_effective_permissions(employee: Dict[str, Any]) -> Dict[str, bool]:
     return perms
 
 
+def _split_total_leave_1_to_3(rounded_total: int) -> Tuple[int, int]:
+    """
+    توزيع إجمالي الأيام الصحيح بدون كسور بنسبة تميل للاعتيادي (1 : 3 تقريباً):
+    - 3 أيام -> 1 عارضة، 2 اعتيادي
+    - 4 أيام -> 1 عارضة، 3 اعتيادي
+    - 5 أيام -> 2 عارضة، 3 اعتيادي
+    - 6 أيام -> 2 عارضة، 4 اعتيادي
+    """
+    if rounded_total <= 0:
+        return 0, 0
+    if rounded_total == 1:
+        return 1, 0
+    if rounded_total == 2:
+        return 1, 1
+
+    casual_days = rounded_total // 4
+    if rounded_total in (5, 6):
+        casual_days = max(casual_days, 2)
+    elif casual_days < 1:
+        casual_days = 1
+
+    casual_days = min(casual_days, rounded_total - 1)
+    annual_days = rounded_total - casual_days
+    return annual_days, casual_days
+
+
 def calculate_prorated_leave_entitlement(
     hire_date_val: Any,
     admin_year: str = "2026",
@@ -96,51 +126,48 @@ def calculate_prorated_leave_entitlement(
     is_annual_reset: bool = False,
 ) -> Tuple[float, float, str]:
     """
-    حساب الاستحقاق السنوي والعارض بناءً على تاريخ التعيين خلال السنة،
-    أو توحيد الجميع عند تصفير/تجديد بداية السنة الإدارية.
-    - تعيين 6 أشهر فأكثر متبقية: النصف تقريباً (أو حسب نسبة الأشهر المتبقية من السنة)
-    - تعيين خلال آخر 3 شهور من السنة: الربع تقريباً
-    - عند التصفير السنوي (is_annual_reset=True): يحصل الجميع على الرصيد الكامل بالتساوي.
+    حساب الاستحقاق السنوي والعارض بدون أي كسور (أعداد صحيحة فقط)،
+    مع جعل النصيب الأكبر في الاعتيادي.
     """
+    full_annual = float(round_nearest_int(annual_base))
+    full_casual = float(round_nearest_int(casual_base))
+
     if is_annual_reset:
         return (
-            round_half_up_2(annual_base),
-            round_half_up_2(casual_base),
+            full_annual,
+            full_casual,
             "رصيد بداية السنة الموحّد للجميع",
         )
 
     hire_dt = parse_date_safe(hire_date_val)
     if not hire_dt:
-        return round_half_up_2(annual_base), round_half_up_2(casual_base), "رصيد افتراضي"
+        return full_annual, full_casual, "رصيد افتراضي"
 
     try:
         year_int = int(str(admin_year).strip()[:4])
     except ValueError:
         year_int = date.today().year
 
-    year_end = date(year_int, 12, 31)
     if hire_dt.year < year_int:
-        return round_half_up_2(annual_base), round_half_up_2(casual_base), "معيّن قبل بداية السنة"
+        return full_annual, full_casual, "معيّن قبل بداية السنة"
 
     if hire_dt.year > year_int:
         return 0.0, 0.0, "تاريخ التعيين في سنة لاحقة"
 
-    # حساب عدد الأشهر المتبقية تقريباً حتى نهاية السنة
-    remaining_months = (year_end.year - hire_dt.year) * 12 + (year_end.month - hire_dt.month) + 1
-    if remaining_months >= 9:
-        factor = 1.0
-        note = "استحقاق كامل للسنة"
-    elif 5 <= remaining_months <= 8:
-        factor = 0.5
-        note = "استحقاق نسبي (نصف الرصيد - حوالي 6 أشهر متبقية)"
-    else:
-        factor = 0.25
-        note = "استحقاق نسبي (ربع الرصيد - آخر 3 شهور من السنة)"
+    remaining_months = 12 - hire_dt.month + 1
+    if remaining_months >= 12:
+        return full_annual, full_casual, "استحقاق كامل للسنة"
+
+    total_pool = float(annual_base) + float(casual_base)
+    raw_prorated_total = total_pool * (remaining_months / 12.0)
+    rounded_total = max(0, round_nearest_int(raw_prorated_total))
+
+    annual_days, casual_days = _split_total_leave_1_to_3(rounded_total)
 
     return (
-        round_half_up_2(annual_base * factor),
-        round_half_up_2(casual_base * factor),
-        note,
+        float(annual_days),
+        float(casual_days),
+        f"استحقاق نسبي صحيح ({rounded_total} أيام: {annual_days} اعتيادي + {casual_days} عارضة)",
     )
 
 
@@ -221,13 +248,7 @@ def validate_leave_request(
     now_dt: Optional[datetime] = None,
 ) -> Tuple[bool, str]:
     """
-    التحقق الكامل من صحة طلب الإجازة وفق قواعد معامل أ.د أسامة عبد المتعال منصور:
-    - إجازة عارضة: في نفس اليوم، مفتوحة حتى نفاد الرصيد العارض.
-    - إجازة اعتيادية: قبل التنفيذ بـ 24 ساعة على الأقل، حد أقصى يومان في الشهر، وتُخصم من الاعتيادي.
-    - إجازة سنوية: قبلها بأسبوع (7 أيام) على الأقل، تُخصم من الاعتيادي، وحد أقصى 6 أيام.
-    - إجازة مرضية: في أي يوم، سبب ومرفق تقرير (عند التفعيل).
-    - عمرة (10 أيام) وحج (15 يوماً).
-    - عدم تفعيل الرصيد إلا بعد مرور 30 يوماً من تاريخ التعيين (للأنواع الخاضعة للشرط).
+    التحقق الكامل من صحة طلب الإجازة وفق قواعد معامل أ.د أسامة عبد المتعال منصور.
     """
     current_dt = now_dt or datetime.now()
     today_date = current_dt.date()
@@ -241,25 +262,20 @@ def validate_leave_request(
     code = (leave_type.get("code") or leave_type.get("id") or "").strip().lower()
     type_name = leave_type.get("name_ar") or code
 
-    # التحقق من فترة التفعيل بعد التعيين (شهر = 30 يوماً)
     min_tenure = int(leave_type.get("min_tenure_days") if leave_type.get("min_tenure_days") is not None else 30)
     if min_tenure > 0:
         tenure_ok, tenure_msg = has_completed_min_tenure(employee.get("hire_date"), start_date, min_tenure)
         if not tenure_ok:
             return False, tenure_msg
 
-    # التحقق من الحد الأقصى للأيام في الطلب الواحد
     max_per_req = leave_type.get("max_days_per_request")
     if max_per_req is not None and float(days_requested) > float(max_per_req):
         return False, f"الحد الأقصى لـ ({type_name}) هو {max_per_req} أيام ولا يمكن تجاوزه."
 
-    # قواعد خاصة بكل نوع إجازة
     if code == "casual":
-        # الإجازة العارضة تُطلب في نفس اليوم
         if start_date != today_date or end_date != today_date:
             return False, "الإجازة العارضة متاحة للتقديم في نفس اليوم فقط."
     elif code == "regular":
-        # الإجازة الاعتيادية: قبل التنفيذ بـ 24 ساعة على الأقل + حد أقصى يومان في الشهر
         start_dt_midnight = datetime.combine(start_date, datetime.min.time())
         if (start_dt_midnight - current_dt).total_seconds() < 24 * 3600:
             return False, "الإجازة الاعتيادية يجب تقديمها قبل موعد التنفيذ بـ 24 ساعة على الأقل."
@@ -290,7 +306,6 @@ def validate_leave_request(
                 f"غير مسموح بأكثر من {max_monthly} أيام إجازة اعتيادية في الشهر؛ لقد تجاوزت الحد المسموح لشهر {target_ym}.",
             )
     elif code == "annual":
-        # الإجازة السنوية: قبلها بأسبوع على الأقل، تُخصم من الاعتيادي، بحد أقصى 6 أيام
         if (start_date - today_date).days < 7:
             return False, "الإجازة السنوية يجب تقديمها قبل موعدها بأسبوع (7 أيام) على الأقل."
         if float(days_requested) > 6.0:
@@ -307,7 +322,6 @@ def validate_leave_request(
         if float(days_requested) > 15.0:
             return False, "إجازة الحج بحد أقصى 15 يوماً."
 
-    # التحقق من الرصيد المتاح إذا كان النوع يخصم من رصيد
     if bool(leave_type.get("deducts")) and leave_balance is not None:
         bal_field = (leave_type.get("balance_field") or "annual").strip().lower()
         if bal_field == "casual":
@@ -315,12 +329,12 @@ def validate_leave_request(
             used_bal = float(leave_balance.get("used_casual") or 0)
             remaining = total_bal - used_bal
             if float(days_requested) > remaining:
-                return False, f"رصيد الإجازات العارضة المتبقي ({remaining}) لا يكفي لطلب ({days_requested}) يوم."
+                return False, f"رصيد الإجازات العارضة المتبقي ({int(remaining)}) لا يكفي لطلب ({int(days_requested)}) يوم."
         else:
             total_bal = float(leave_balance.get("annual") or 0)
             used_bal = float(leave_balance.get("used_annual") or 0)
             remaining = total_bal - used_bal
             if float(days_requested) > remaining:
-                return False, f"رصيد الإجازات الاعتيادي/السنوي المتبقي ({remaining}) لا يكفي لطلب ({days_requested}) يوم."
+                return False, f"رصيد الإجازات الاعتيادي/السنوي المتبقي ({int(remaining)}) لا يكفي لطلب ({int(days_requested)}) يوم."
 
     return True, "الطلب مطابق لقواعد الإجازات."
