@@ -1797,7 +1797,7 @@ def render_penalties_rewards_advances(
 
 
 # =====================================================================
-# 5. البصمة والـ Payroll (شيت المرتبات للمدير العام و HR ورئيس مجلس الإدارة فقط + إضافي الأجور والانصراف)
+# 5. البصمة والـ Payroll (شيت المرتبات للمدير العام و HR ورئيس مجلس الإدارة فقط + إضافة الحضور والانصراف)
 # =====================================================================
 def render_attendance_and_payroll(
     current_user: Dict[str, Any],
@@ -2388,7 +2388,7 @@ def render_attendance_and_payroll(
                             <td class="pay-plus">+ {my_res['rewards_total']:,.2f} ج</td>
                         </tr>
                         <tr>
-                            <td>إضافي الأجور والانصراف</td>
+                            <td>إضافة الحضور والانصراف</td>
                             <td class="pay-plus">+ {my_res['overtime_pay']:,.2f} ج</td>
                         </tr>
                         <tr>
@@ -2445,7 +2445,7 @@ def render_attendance_and_payroll(
                         "المرتب الأساسي": r["base_salary"],
                         "إجازات رسمية (+يوم)": r["holiday_bonus"],
                         "المكافآت": r["rewards_total"],
-                        "إضافي الأجور والانصراف": r["overtime_pay"],
+                        "إضافة الحضور والانصراف": r["overtime_pay"],
                         "خصم السلف": r["advances_deduction"],
                         "خصم الجزاءات": r["penalties_deduction"],
                         "خصم التأخير/الانصراف": r["late_deduction"],
@@ -2471,7 +2471,7 @@ def render_attendance_and_payroll(
                     "المرتب الأساسي": tot_base,
                     "إجازات رسمية (+يوم)": tot_hol,
                     "المكافآت": tot_rew,
-                    "إضافي الأجور والانصراف": tot_ot,
+                    "إضافة الحضور والانصراف": tot_ot,
                     "خصم السلف": tot_adv,
                     "خصم الجزاءات": tot_pen,
                     "خصم التأخير/الانصراف": tot_late,
@@ -2484,7 +2484,7 @@ def render_attendance_and_payroll(
                 g1, g2, g3, g4, g5, g6 = st.columns(6)
                 g1.metric("إجمالي المرتبات الأساسية", f"{tot_base:,.2f} ج")
                 g2.metric("إجمالي المكافآت", f"{tot_rew:,.2f} ج")
-                g3.metric("إضافي الأجور والانصراف", f"{tot_ot:,.2f} ج")
+                g3.metric("إضافة الحضور والانصراف", f"{tot_ot:,.2f} ج")
                 g4.metric("إجمالي الخصومات", f"{tot_all_ded:,.2f} ج")
                 g5.metric("إجمالي الجزاءات", f"{tot_pen:,.2f} ج")
                 g6.metric("إجمالي المرتبات الفعلية", f"{tot_net:,.2f} ج")
@@ -2545,7 +2545,7 @@ def render_attendance_and_payroll(
                             "الأساسي": p.get("base_salary"),
                             "إجازات رسمية": p.get("holiday_bonus"),
                             "مكافآت": p.get("rewards_total"),
-                            "إضافي الأجور والانصراف": p.get("overtime_pay"),
+                            "إضافة الحضور والانصراف": p.get("overtime_pay"),
                             "سلف": p.get("advances_deduction"),
                             "جزاءات": p.get("penalties_deduction"),
                             "تأخيرات": p.get("late_deduction"),
