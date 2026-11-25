@@ -58,12 +58,10 @@ def evaluate_attendance_record(
     is_leave_day: bool = False,
 ) -> Dict[str, Any]:
     """
-    تقييم سجل البصمة اليومي:
-    - التأخير (late_minutes): إذا تجاوز وقت الدخول موعد البداية + سماح الحضور.
-    - الانصراف المبكر (early_leave_minutes): إذا انصرف قبل موعد النهاية (scheduled_end).
-      يُحتسب الانصراف المبكر الفعلي بالدقائق؛ وعند الخصم في المرتب يُطبَّق سماح الانصراف (grace_early_minutes).
-    - الوقت الإضافي (overtime_minutes): إذا انصرف بعد موعد النهاية (scheduled_end)،
-      يبدأ بحالة pending_manager حتى يوافق المدير المباشر ثم المدير العام.
+    تقييم سجل البصمة اليومي مع خصم دقائق السماح من الإعدادات:
+    - late_minutes: صافي دقائق التأخير بعد خصم سماح الحضور (مثال: 16 - 15 = 1 دقيقة).
+    - early_leave_minutes: صافي دقائق الانصراف المبكر بعد خصم سماح الانصراف (مثال: 10 - 5 = 5 دقائق).
+    - overtime_minutes: دقائق الوقت الإضافي بعد نهاية الدوام، وتبدأ بحالة pending_manager.
     """
     if is_leave_day:
         return {
@@ -87,11 +85,14 @@ def evaluate_attendance_record(
     cin_m = _parse_time_minutes(check_in_val)
     cout_m = _parse_time_minutes(check_out_val)
 
+    late_grace = max(0, int(grace_late_minutes or 0))
+    early_grace = max(0, int(grace_early_minutes or 0))
+
     late_minutes = 0
     if cin_m is not None:
         diff_in = cin_m - sched_start_m
-        if diff_in > max(0, int(grace_late_minutes or 0)):
-            late_minutes = int(diff_in)
+        if diff_in > late_grace:
+            late_minutes = int(diff_in - late_grace)
 
     early_leave_minutes = 0
     overtime_minutes = 0
@@ -103,7 +104,9 @@ def evaluate_attendance_record(
             work_cout_m += 24 * 60
 
         if work_cout_m < sched_end_m:
-            early_leave_minutes = int(sched_end_m - work_cout_m)
+            raw_early = int(sched_end_m - work_cout_m)
+            if raw_early > early_grace:
+                early_leave_minutes = int(raw_early - early_grace)
         elif work_cout_m > sched_end_m:
             overtime_minutes = int(work_cout_m - sched_end_m)
             overtime_status = "pending_manager"
@@ -227,12 +230,13 @@ def compute_employee_monthly_payroll(
     penalties_rewards: List[Dict[str, Any]],
     advances: List[Dict[str, Any]],
     official_holidays: List[Dict[str, Any]],
+    grace_late_minutes: int = 15,
     grace_early_minutes: int = 5,
 ) -> Dict[str, Any]:
     """
-    حساب المرتب الشهري الفعلي للموظف:
+    حساب المرتب الشهري الفعلي للموظف مع تطبيق السماح من الإعدادات:
     - المرتب الأساسي + إجازات رسمية (+يوم لكل إجازة مفعّلة) + المكافآت المعتمدة + الوقت الإضافي المعتمد
-    - ناقص: خصم السلف المستحقة للشهر + الجزاءات المعتمدة + خصم التأخير والانصراف المبكر (بعد سماح الانصراف).
+    - ناقص: خصم السلف المستحقة للشهر + الجزاءات المعتمدة + خصم التأخير والانصراف المبكر (بعد خصم السماح).
     """
     ym = str(payroll_month or "").strip()[:7]
     emp_id = str(employee.get("id") or "")
@@ -247,7 +251,6 @@ def compute_employee_monthly_payroll(
         work_hours = 8.0
     minute_rate = (daily_rate / work_hours) / 60.0 if daily_rate > 0 else 0.0
 
-    # 1. الإجازات الرسمية المفعّلة في الشهر (إضافة يوم للمرتب)
     active_holidays_in_month = 0
     for hol in official_holidays:
         if hol.get("active", True) and bool(hol.get("add_day_to_payroll", True)):
@@ -256,7 +259,6 @@ def compute_employee_monthly_payroll(
                 active_holidays_in_month += 1
     holiday_bonus = _round2(daily_rate * active_holidays_in_month)
 
-    # 2. المكافآت والجزاءات المعتمدة للشهر
     rewards_total = 0.0
     penalties_deduction = 0.0
     for pr in penalties_rewards:
@@ -274,10 +276,12 @@ def compute_employee_monthly_payroll(
         elif etype == "penalty":
             penalties_deduction = _round2(penalties_deduction + amt)
 
-    # 3. الوقت الإضافي المعتمد وخصم التأخير والانصراف المبكر من سجلات البصمة
     approved_ot_minutes = 0
     deductible_late_and_early_minutes = 0
-    early_grace = max(0, int(grace_early_minutes or 5))
+    late_grace = max(0, int(grace_late_minutes or 0))
+    early_grace = max(0, int(grace_early_minutes or 0))
+    s_start = employee.get("work_start_time") or "09:00:00"
+    s_end = employee.get("work_end_time") or "17:00:00"
 
     for att in attendance_logs:
         if str(att.get("employee_id") or "") not in emp_ids:
@@ -291,20 +295,29 @@ def compute_employee_monthly_payroll(
         if ot_mins > 0 and ot_st in ("approved", "gm_approved"):
             approved_ot_minutes += ot_mins
 
-        late_m = int(att.get("late_minutes") or 0)
-        early_m = int(att.get("early_leave_minutes") or 0)
-
-        if late_m > 0:
-            deductible_late_and_early_minutes += late_m
-
-        # تطبيق سماح الانصراف: يُخصم فقط إذا تجاوز الانصراف المبكر حد السماح
-        if early_m > early_grace:
-            deductible_late_and_early_minutes += early_m
+        has_times = bool(att.get("check_in") or att.get("check_out"))
+        if has_times:
+            ev = evaluate_attendance_record(
+                att.get("check_in"),
+                att.get("check_out"),
+                att.get("scheduled_start") or s_start,
+                att.get("scheduled_end") or s_end,
+                grace_late_minutes=late_grace,
+                grace_early_minutes=early_grace,
+                is_leave_day=False,
+            )
+            deductible_late_and_early_minutes += int(ev["late_minutes"]) + int(ev["early_leave_minutes"])
+        else:
+            raw_late = int(att.get("late_minutes") or 0)
+            raw_early = int(att.get("early_leave_minutes") or 0)
+            if raw_late > late_grace:
+                deductible_late_and_early_minutes += (raw_late - late_grace)
+            if raw_early > early_grace:
+                deductible_late_and_early_minutes += (raw_early - early_grace)
 
     overtime_pay = _round2(approved_ot_minutes * minute_rate)
     late_deduction = _round2(deductible_late_and_early_minutes * minute_rate)
 
-    # 4. السلف المستحقة للشهر
     adv_summ = get_employee_monthly_advances_summary(emp_id, ym, advances)
     advances_deduction = _round2(float(adv_summ.get("total_due") or 0))
 
