@@ -122,7 +122,6 @@ def _build_remaining_schedule_for_employee(
         l_inst = round_half_up_2(float(adv.get("last_installment_amount") or m_inst))
         start_m = str(adv.get("start_payroll_month") or target_ym)[:7]
 
-        # توزيع المبلغ المتبقي على الأقساط المتبقية من بداية الشهر المستهدف أو من شهر بداية الخصم
         base_m = max(start_m, target_ym[:7])
         rem_left = rem
         for idx in range(cnt):
@@ -230,7 +229,12 @@ def _filter_visible_penalties_rewards(
     employees: List[Dict[str, Any]],
     penalties_rewards: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """تصفية سجل الجزاءات والمكافآت حسب الدور والتبعية."""
+    """
+    تصفية سجل الجزاءات والمكافآت حسب الدور والتبعية:
+    - الموظف: يرى الخاص به فقط.
+    - المدير المباشر والـ Senior: يريان الخاص بالتابعين لهما + الخاص بهما شخصياً.
+    - المدير العام / رئيس مجلس الإدارة / نائب الرئيس / HR: يرون الكل.
+    """
     user_role = (current_user.get("role") or "employee").strip().lower()
     if user_role in ("general_manager", "chairman", "vice_chairman", "hr"):
         return penalties_rewards
@@ -242,9 +246,8 @@ def _filter_visible_penalties_rewards(
             if str(pr.get("employee_id") or "") in my_ids
         ]
 
-    sub_emps = _get_subordinate_employees(current_user, employees)
-    allowed_emp_ids = set()
-    for se in sub_emps:
+    allowed_emp_ids = set(my_ids)
+    for se in _get_subordinate_employees(current_user, employees):
         allowed_emp_ids.update(_emp_identifiers(se))
 
     return [
@@ -1269,7 +1272,6 @@ def render_penalties_rewards_advances(
         else:
             st.info("لا توجد سجلات جزاءات أو مكافآت ضمن نطاق صلاحياتك حالياً.")
 
-    # --- التاب الثاني: تتبع السلف للمستخدم (سلفه هو فقط + جدول الأقساط المتبقية بالشهور) ---
     with tabs[1]:
         st.markdown("#### تقديم طلب سلفة")
 
@@ -1379,7 +1381,6 @@ def render_penalties_rewards_advances(
         else:
             st.success("لا توجد أقساط سلف متبقية عليك.")
 
-    # --- التاب الثالث: تجميع وسداد السلف (لـ HR والمدير العام فقط) ---
     if can_view_hr_settle and len(tabs) > 2:
         with tabs[2]:
             st.markdown("#### تجميع سلف الموظف المستحقة للشهر وتأكيد السداد")
