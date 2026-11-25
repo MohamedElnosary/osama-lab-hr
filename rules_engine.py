@@ -190,8 +190,8 @@ def determine_initial_approval_route(
 ) -> Dict[str, Any]:
     """
     تحديد مسار الموافقات الأولي لطلب الإجازة:
-    - إذا تم اختيار موظف بديل: يذهب أولاً إلى الموظف البديل (pending_backup)،
-      وعند موافقته ينتقل إلى الـ Senior (إن وُجد) ثم المدير المباشر ثم المدير العام.
+    - إذا تم اختيار موظف بديل (حتى لو كان المدير المباشر): يذهب أولاً إلى الموظف البديل (pending_backup)،
+      وعند موافقته كبديل ينتقل إلى الـ Senior (إن وُجد) ثم المدير المباشر ثم المدير العام.
     - إذا تم اختيار (بدون بديل): ينتقل مباشرة إلى الـ Senior (إن وُجد) أو المدير المباشر ثم المدير العام.
     """
     senior_id = employee.get("senior_id")
@@ -274,6 +274,29 @@ def validate_leave_request(
     if days_requested <= 0:
         return False, "عدد أيام الإجازة يجب أن يكون أكبر من صفر."
 
+    # 1. منع تكرار أو تداخل الإجازات في نفس اليوم (حتى لو اختلف نوع الإجازة)
+    emp_id = str(employee.get("id") or "")
+    emp_team_id = str(employee.get("team_user_id") or "")
+    for req in existing_requests:
+        req_emp = str(req.get("employee_id") or "")
+        req_user = str(req.get("employee_user_id") or "")
+        if req_emp != emp_id and (not emp_team_id or req_user != emp_team_id):
+            continue
+        status = (req.get("status") or "").lower()
+        if status.startswith("rejected") or status.startswith("cancelled"):
+            continue
+        req_s = parse_date_safe(req.get("start_date"))
+        req_e = parse_date_safe(req.get("end_date"))
+        if req_s and req_e:
+            # فحص التقاطع بين الفترتين [start_date, end_date] و [req_s, req_e]
+            if start_date <= req_e and end_date >= req_s:
+                prev_type = req.get("type_name") or req.get("type_code") or "إجازة"
+                state_ar = "معتمدة" if status == "approved" else "قيد المراجعة"
+                return (
+                    False,
+                    f"تم تسجيل إجازة مسبقاً ({prev_type} - {state_ar}) في الفترة من {req_s.isoformat()} إلى {req_e.isoformat()}؛ لا يمكن أخذ إجازتين في نفس اليوم.",
+                )
+
     code = (leave_type.get("code") or leave_type.get("id") or "").strip().lower()
     type_name = leave_type.get("name_ar") or code
 
@@ -296,8 +319,6 @@ def validate_leave_request(
             return False, "الإجازة الاعتيادية يجب تقديمها قبل موعد التنفيذ بـ 24 ساعة على الأقل."
 
         max_monthly = int(leave_type.get("max_days_per_month") or 2)
-        emp_id = str(employee.get("id"))
-        emp_team_id = str(employee.get("team_user_id") or "")
         target_ym = start_date.strftime("%Y-%m")
 
         used_regular_in_month = 0.0
