@@ -1676,7 +1676,6 @@ def render_attendance_and_payroll(
     tabs = st.tabs(tab_titles)
     t_idx = 0
 
-    # --- 1) شيت البصمة (لجميع المستخدمين للعرض والمتابعة فقط من 21 إلى 20) ---
     with tabs[t_idx]:
         st.markdown("#### شيت البصمة (الفترة من يوم 21 الشهر السابق إلى يوم 20 الشهر المختار)")
         sheet_ym = st.text_input("اختر الشهر (YYYY-MM)", value=date.today().strftime("%Y-%m"), key="att_sheet_ym")
@@ -1708,7 +1707,6 @@ def render_attendance_and_payroll(
         st.dataframe(sheet_rows, use_container_width=True, hide_index=True)
     t_idx += 1
 
-    # --- 2) رفع البصمة (للمدير العام و HR فقط: رفع ملف Excel/CSV أو إدخال يدوي Manual) ---
     if can_upload_att:
         with tabs[t_idx]:
             st.markdown("#### رفع وإدخال البصمة (للمدير العام و HR فقط)")
@@ -1915,7 +1913,6 @@ def render_attendance_and_payroll(
                         st.rerun()
         t_idx += 1
 
-    # --- 3) سجل الوقت الإضافي ---
     with tabs[t_idx]:
         st.markdown("#### سجل الوقت الإضافي (الاعتماد يتم من زر الموافقات الرئيسي)")
         ot_records = [a for a in attendance_logs if int(a.get("overtime_minutes") or 0) > 0]
@@ -1939,7 +1936,6 @@ def render_attendance_and_payroll(
             st.info("لا توجد سجلات وقت إضافي حتى الآن.")
     t_idx += 1
 
-    # --- 4) شيت المرتب الفعلي والأرشيف ---
     with tabs[t_idx]:
         st.markdown("#### شيت المرتب الشهري الفعلي والأرشيف")
         pay_ym = st.text_input("شهر المرتب (YYYY-MM)", value=date.today().strftime("%Y-%m"), key="pay_sheet_ym")
@@ -1956,6 +1952,7 @@ def render_attendance_and_payroll(
                 penalties_rewards=penalties_rewards,
                 advances=advances,
                 official_holidays=official_holidays,
+                grace_early_minutes=grace_early,
             )
             computed_list.append(res)
 
