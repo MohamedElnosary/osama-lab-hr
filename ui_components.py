@@ -58,7 +58,7 @@ def _sync_leave_days_state() -> None:
 
 
 # =====================================================================
-# تجميع كافة الموافقات المعلقة في مكان واحد (إجازات + جزاءات/مكافآت + سلف + إضافي)
+# تجميع كافة الموافقات المعلقة في مكان واحد (بديل + إجازات + جزاءات/مكافآت + سلف + إضافي)
 # =====================================================================
 def get_pending_items_bundle(
     current_user: Dict[str, Any],
@@ -74,10 +74,15 @@ def get_pending_items_bundle(
     user_ids = _emp_identifiers(current_user)
     user_role = (current_user.get("role") or "employee").lower()
 
+    # 1. موافقات الإجازات (بما فيها موافقة الموظف البديل أولاً ثم الـ Senior / المدير / المدير العام)
     pending_leaves: List[Dict[str, Any]] = []
-    if perms.get("approve_leaves"):
-        for lr in leave_requests:
-            st_val = (lr.get("status") or "").lower()
+    for lr in leave_requests:
+        st_val = (lr.get("status") or "").lower()
+        backup_id = str(lr.get("backup_employee_id") or "")
+
+        if st_val == "pending_backup" and backup_id and backup_id in user_ids:
+            pending_leaves.append(lr)
+        elif perms.get("approve_leaves"):
             if user_role == "general_manager" and st_val in ("pending_senior", "pending_manager", "pending_gm", "pending"):
                 pending_leaves.append(lr)
             elif st_val == "pending_senior" and str(lr.get("senior_id") or "") in user_ids:
@@ -85,6 +90,7 @@ def get_pending_items_bundle(
             elif st_val == "pending_manager" and str(lr.get("direct_manager_id") or "") in user_ids:
                 pending_leaves.append(lr)
 
+    # 2. موافقات الجزاءات والمكافآت
     pending_pr: List[Dict[str, Any]] = []
     if perms.get("approve_penalties") or perms.get("approve_rewards"):
         for pr in penalties_rewards:
@@ -98,6 +104,7 @@ def get_pending_items_bundle(
             elif etype == "penalty" and perms.get("approve_penalties"):
                 pending_pr.append(pr)
 
+    # 3. موافقات السلف
     pending_adv: List[Dict[str, Any]] = []
     if perms.get("approve_advances"):
         for adv in advances:
@@ -107,6 +114,7 @@ def get_pending_items_bundle(
             elif user_role in ("manager", "hr") and st_val == "pending":
                 pending_adv.append(adv)
 
+    # 4. موافقات الوقت الإضافي
     pending_ot: List[Dict[str, Any]] = []
     if perms.get("approve_overtime"):
         for att in attendance_logs:
@@ -175,12 +183,14 @@ def _filter_visible_leave_requests(
         req_user_id = str(lr.get("employee_user_id") or "")
         req_senior_id = str(lr.get("senior_id") or "")
         req_mgr_id = str(lr.get("direct_manager_id") or "")
+        req_backup_id = str(lr.get("backup_employee_id") or "")
 
         if (
             req_emp_id in subordinate_ids
             or (req_user_id and req_user_id in subordinate_ids)
             or (req_senior_id and req_senior_id in my_ids)
             or (req_mgr_id and req_mgr_id in my_ids)
+            or (req_backup_id and req_backup_id in my_ids)
         ):
             visible.append(lr)
     return visible
@@ -318,7 +328,7 @@ def render_dashboard(
 
 
 # =====================================================================
-# 2. الشاشة الموحدة الوحيدة للموافقات (إجازات + جزاءات/مكافآت + سلف + إضافي)
+# 2. الشاشة الموحدة الوحيدة للموافقات (بديل + إجازات + جزاءات/مكافآت + سلف + إضافي)
 # =====================================================================
 def render_approvals_inbox(
     current_user: Dict[str, Any],
@@ -371,10 +381,11 @@ def render_approvals_inbox(
             st_val = (lr.get("status") or "").lower()
             with st.container(border=True):
                 backup_txt = f" | البديل: **{lr.get('backup_employee_name')}**" if lr.get("backup_employee_name") else ""
+                stage_badge = "موافقة الموظف البديل" if st_val == "pending_backup" else st_val
                 st.write(
                     f"**{lr.get('employee_name')}** — {lr.get('type_name')} | "
                     f"من `{str(lr.get('start_date'))[:10]}` إلى `{str(lr.get('end_date'))[:10]}` "
-                    f"(**{lr.get('days')} يوم**){backup_txt} | الحالة: `{st_val}`"
+                    f"(**{lr.get('days')} يوم**){backup_txt} | المرحلة: `{stage_badge}`"
                 )
                 if lr.get("reason"):
                     st.caption(f"السبب: {lr.get('reason')}")
@@ -382,14 +393,23 @@ def render_approvals_inbox(
                     st.markdown(f"[📎 عرض التقرير المرفق]({lr.get('attachment_url')})")
 
                 note_inp = st.text_input("ملاحظة الاعتماد/الرفض", key=f"unif_note_lr_{lr['id']}")
-                col_a, col_r, _ = st.columns([1.2, 1.2, 4])
+                col_a, col_r, _ = st.columns([1.3, 1.2, 4])
 
                 with col_a:
-                    if st.button("✅ موافقة", key=f"unif_app_lr_{lr['id']}", type="primary"):
+                    app_btn_lbl = "✅ موافقة كبديل" if st_val == "pending_backup" else "✅ موافقة"
+                    if st.button(app_btn_lbl, key=f"unif_app_lr_{lr['id']}", type="primary"):
                         approvals = list(lr.get("approvals") or [])
-                        if st_val == "pending_senior":
+                        if st_val == "pending_backup":
+                            stage = "backup"
+                            if lr.get("senior_id"):
+                                next_status = "pending_senior"
+                            elif lr.get("direct_manager_id"):
+                                next_status = "pending_manager"
+                            else:
+                                next_status = "pending_gm"
+                        elif st_val == "pending_senior":
                             stage = "senior"
-                            next_status = "pending_gm" if not lr.get("direct_manager_id") else "pending_manager"
+                            next_status = "pending_manager" if lr.get("direct_manager_id") else "pending_gm"
                         elif st_val == "pending_manager":
                             stage = "manager"
                             next_status = "pending_gm"
@@ -435,7 +455,11 @@ def render_approvals_inbox(
                 with col_r:
                     if st.button("❌ رفض", key=f"unif_rej_lr_{lr['id']}"):
                         approvals = list(lr.get("approvals") or [])
-                        stage = "senior" if st_val == "pending_senior" else ("manager" if st_val == "pending_manager" else "gm")
+                        stage = (
+                            "backup"
+                            if st_val == "pending_backup"
+                            else ("senior" if st_val == "pending_senior" else ("manager" if st_val == "pending_manager" else "gm"))
+                        )
                         rej_status = f"rejected_{stage}"
                         approvals.append({
                             "at": datetime.utcnow().isoformat() + "Z",
@@ -645,7 +669,6 @@ def render_leaves_module(
 
             _sync_leave_days_state()
             days_int = int(st.session_state.get("calculated_leave_days", 0))
-            days_val = float(days_int)
 
             with d_col3:
                 st.text_input(
@@ -702,14 +725,14 @@ def render_leaves_module(
                             )
 
                         chosen_backup = backup_choices.get(backup_lbl)
-                        route = determine_initial_approval_route(current_user, employees)
+                        route = determine_initial_approval_route(current_user, employees, backup_employee=chosen_backup)
                         payload = {
                             "employee_id": current_user.get("id"),
                             "employee_user_id": current_user.get("team_user_id") or current_user.get("id"),
                             "employee_name": current_user.get("name_ar"),
                             "department_id": current_user.get("department_id"),
                             "shift_id": current_user.get("shift_id"),
-                            "backup_employee_id": chosen_backup.get("id") if chosen_backup else None,
+                            "backup_employee_id": (chosen_backup.get("team_user_id") or chosen_backup.get("id")) if chosen_backup else None,
                             "backup_employee_name": chosen_backup.get("name_ar") if chosen_backup else "",
                             "type_code": chosen_type.get("code"),
                             "type_name": chosen_type.get("name_ar"),
@@ -790,14 +813,14 @@ def render_leaves_module(
         st.markdown("#### رصيد إجازاتي الحالي")
         st.caption(f"تاريخ التعيين: `{str(current_user.get('hire_date') or 'غير محدد')[:10]}`")
         r1, r2, r3 = st.columns(3)
-        r1.metric("الاعتيادي / السنوي المستحق", round_half_up_2(ann_total))
-        r2.metric("المستخدم من الاعتيادي / السنوي", round_half_up_2(ann_used))
-        r3.metric("المتبقي من الاعتيادي / السنوي", round_half_up_2(annual_rem))
+        r1.metric("الاعتيادي / السنوي المستحق", int(round(ann_total)))
+        r2.metric("المستخدم من الاعتيادي / السنوي", int(round(ann_used)))
+        r3.metric("المتبقي من الاعتيادي / السنوي", int(round(annual_rem)))
 
         c_r1, c_r2, c_r3 = st.columns(3)
-        c_r1.metric("العارضة المستحق", round_half_up_2(cas_total))
-        c_r2.metric("المستخدم من العارضة", round_half_up_2(cas_used))
-        c_r3.metric("المتبقي من العارضة", round_half_up_2(casual_rem))
+        c_r1.metric("العارضة المستحق", int(round(cas_total)))
+        c_r2.metric("المستخدم من العارضة", int(round(cas_used)))
+        c_r3.metric("المتبقي من العارضة", int(round(casual_rem)))
 
     if can_manage_all_balances and len(tabs) > 3:
         with tabs[3]:
@@ -859,20 +882,20 @@ def render_leaves_module(
             bal_rows = []
             for emp in employees:
                 b = bal_by_emp.get(str(emp.get("id"))) or bal_by_emp.get(str(emp.get("team_user_id") or "")) or {}
-                ann_t = float(b.get("annual") or 0)
-                ann_u = float(b.get("used_annual") or 0)
-                cas_t = float(b.get("casual") or 0)
-                cas_u = float(b.get("used_casual") or 0)
+                ann_t = int(round(float(b.get("annual") or 0)))
+                ann_u = int(round(float(b.get("used_annual") or 0)))
+                cas_t = int(round(float(b.get("casual") or 0)))
+                cas_u = int(round(float(b.get("used_casual") or 0)))
                 bal_rows.append({
                     "الرقم الوظيفي": emp.get("employee_no"),
                     "الاسم": emp.get("name_ar"),
                     "تاريخ التعيين": str(emp.get("hire_date") or "")[:10],
                     "اعتيادي/سنوي مستحق": ann_t,
                     "مستخدم": ann_u,
-                    "متبقي": round_half_up_2(ann_t - ann_u),
+                    "متبقي": ann_t - ann_u,
                     "عارضة مستحق": cas_t,
                     "مستخدم عارضة": cas_u,
-                    "متبقي عارضة": round_half_up_2(cas_t - cas_u),
+                    "متبقي عارضة": cas_t - cas_u,
                 })
             st.dataframe(bal_rows, use_container_width=True, hide_index=True)
 
