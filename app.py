@@ -237,6 +237,7 @@ def main() -> None:
             official_holidays,
             payroll_runs,
             org_settings,
+            leave_requests=leave_requests,
         )
     elif page == "التقييم (KPIs) والتقارير":
         render_kpis_and_reports(
@@ -250,7 +251,14 @@ def main() -> None:
             org_settings,
         )
     elif page == "الموظفون والفروع والصلاحيات":
-        render_admin_and_staff(current_user, employees, departments, shifts, org_settings)
+        render_admin_and_staff(
+            current_user,
+            employees,
+            departments,
+            shifts,
+            org_settings,
+            official_holidays=official_holidays,
+        )
 
 
 if __name__ == "__main__":
