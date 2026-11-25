@@ -74,14 +74,17 @@ def get_pending_items_bundle(
     user_ids = _emp_identifiers(current_user)
     user_role = (current_user.get("role") or "employee").lower()
 
-    # 1. موافقات الإجازات (بما فيها موافقة الموظف البديل أولاً ثم الـ Senior / المدير / المدير العام)
+    # 1. موافقات الإجازات (تذهب أولاً للموظف البديل حتى لو كان المدير المباشر نفسه)
     pending_leaves: List[Dict[str, Any]] = []
     for lr in leave_requests:
         st_val = (lr.get("status") or "").lower()
         backup_id = str(lr.get("backup_employee_id") or "")
 
-        if st_val == "pending_backup" and backup_id and backup_id in user_ids:
-            pending_leaves.append(lr)
+        if st_val == "pending_backup":
+            if backup_id and backup_id in user_ids:
+                pending_leaves.append(lr)
+            elif not backup_id and user_role == "general_manager":
+                pending_leaves.append(lr)
         elif perms.get("approve_leaves"):
             if user_role == "general_manager" and st_val in ("pending_senior", "pending_manager", "pending_gm", "pending"):
                 pending_leaves.append(lr)
@@ -393,7 +396,7 @@ def render_approvals_inbox(
                     st.markdown(f"[📎 عرض التقرير المرفق]({lr.get('attachment_url')})")
 
                 note_inp = st.text_input("ملاحظة الاعتماد/الرفض", key=f"unif_note_lr_{lr['id']}")
-                col_a, col_r, _ = st.columns([1.3, 1.2, 4])
+                col_a, col_r, _ = st.columns([1.4, 1.2, 4])
 
                 with col_a:
                     app_btn_lbl = "✅ موافقة كبديل" if st_val == "pending_backup" else "✅ موافقة"
@@ -726,13 +729,14 @@ def render_leaves_module(
 
                         chosen_backup = backup_choices.get(backup_lbl)
                         route = determine_initial_approval_route(current_user, employees, backup_employee=chosen_backup)
+                        backup_target_id = str(chosen_backup.get("id")) if chosen_backup else None
                         payload = {
                             "employee_id": current_user.get("id"),
                             "employee_user_id": current_user.get("team_user_id") or current_user.get("id"),
                             "employee_name": current_user.get("name_ar"),
                             "department_id": current_user.get("department_id"),
                             "shift_id": current_user.get("shift_id"),
-                            "backup_employee_id": (chosen_backup.get("team_user_id") or chosen_backup.get("id")) if chosen_backup else None,
+                            "backup_employee_id": backup_target_id,
                             "backup_employee_name": chosen_backup.get("name_ar") if chosen_backup else "",
                             "type_code": chosen_type.get("code"),
                             "type_name": chosen_type.get("name_ar"),
