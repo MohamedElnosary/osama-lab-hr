@@ -64,7 +64,6 @@ def get_pending_items_bundle(
     user_ids = _emp_identifiers(current_user)
     user_role = (current_user.get("role") or "employee").lower()
 
-    # 1. موافقات الإجازات
     pending_leaves: List[Dict[str, Any]] = []
     if perms.get("approve_leaves"):
         for lr in leave_requests:
@@ -76,7 +75,6 @@ def get_pending_items_bundle(
             elif st_val == "pending_manager" and str(lr.get("direct_manager_id") or "") in user_ids:
                 pending_leaves.append(lr)
 
-    # 2. موافقات الجزاءات والمكافآت
     pending_pr: List[Dict[str, Any]] = []
     if perms.get("approve_penalties") or perms.get("approve_rewards"):
         for pr in penalties_rewards:
@@ -90,7 +88,6 @@ def get_pending_items_bundle(
             elif etype == "penalty" and perms.get("approve_penalties"):
                 pending_pr.append(pr)
 
-    # 3. موافقات السلف
     pending_adv: List[Dict[str, Any]] = []
     if perms.get("approve_advances"):
         for adv in advances:
@@ -100,7 +97,6 @@ def get_pending_items_bundle(
             elif user_role in ("manager", "hr") and st_val == "pending":
                 pending_adv.append(adv)
 
-    # 4. موافقات الوقت الإضافي
     pending_ot: List[Dict[str, Any]] = []
     if perms.get("approve_overtime"):
         for att in attendance_logs:
@@ -359,7 +355,6 @@ def render_approvals_inbox(
         if b.get("team_user_id"):
             bal_by_emp[str(b["team_user_id"])] = b
 
-    # أ) موافقات الإجازات
     if bundle["leaves"]:
         st.markdown("#### 🗓️ موافقات الإجازات")
         for lr in bundle["leaves"]:
@@ -452,7 +447,6 @@ def render_approvals_inbox(
                         )
                         st.rerun()
 
-    # ب) موافقات الجزاءات والمكافآت
     if bundle["pr"]:
         st.markdown("#### ⚖️ موافقات الجزاءات والمكافآت")
         for pr in bundle["pr"]:
@@ -492,7 +486,6 @@ def render_approvals_inbox(
                         )
                         st.rerun()
 
-    # ج) موافقات السلف
     if bundle["advances"]:
         st.markdown("#### 💳 موافقات السلف")
         for adv in bundle["advances"]:
@@ -527,7 +520,6 @@ def render_approvals_inbox(
                         update_record("advances", adv["id"], {"status": "rejected"})
                         st.rerun()
 
-    # د) موافقات الوقت الإضافي
     if bundle["overtime"]:
         st.markdown("#### 🕒 موافقات الوقت الإضافي")
         for rec in bundle["overtime"]:
@@ -562,7 +554,7 @@ def render_approvals_inbox(
 
 
 # =====================================================================
-# 3. منظومة الإجازات والأرصدة (بدون تاب موافقات داخلي)
+# 3. منظومة الإجازات والأرصدة
 # =====================================================================
 def render_leaves_module(
     current_user: Dict[str, Any],
@@ -619,22 +611,19 @@ def render_leaves_module(
                 f"تفعيل الرصيد بعد: {chosen_type.get('min_tenure_days', 30)} يوم من التعيين"
             )
 
-            c1, c2 = st.columns(2)
+            c1, c2, c3 = st.columns(3)
             with c1:
                 start_dt = st.date_input("تاريخ البداية", value=date.today(), key="leave_start_dt")
             with c2:
                 end_dt = st.date_input("تاريخ النهاية", value=start_dt, min_value=start_dt, key="leave_end_dt")
-
-            auto_days = 0.0 if end_dt < start_dt else float((end_dt - start_dt).days + 1)
-            half_day_opt = st.checkbox(
-                "خصم نصف يوم فقط (في حال طلب نصف يوم على نفس اليوم)",
-                value=False,
-                disabled=(auto_days != 1.0),
-                key="leave_half_day_chk",
-            )
-            days_val = 0.5 if (auto_days == 1.0 and half_day_opt) else auto_days
-
-            st.info(f"📅 عدد الأيام المحسوب تلقائياً: **{days_val:g}** يوم")
+            with c3:
+                if end_dt < start_dt:
+                    days_val = 0.0
+                    days_display = "0"
+                else:
+                    days_val = float((end_dt - start_dt).days + 1)
+                    days_display = f"{int(days_val)}"
+                st.text_input("عدد أيام الإجازة", value=days_display, disabled=True, key="leave_days_box")
 
             with st.form("submit_leave_form", clear_on_submit=False):
                 reason_val = st.text_area("السبب / ملاحظات", placeholder="اكتب السبب (مطلوب للإجازة المرضية أو التوضيح)")
@@ -697,7 +686,7 @@ def render_leaves_module(
                             "leave_requests",
                             "create_leave_request",
                             "إضافة",
-                            f"تقديم طلب {chosen_type.get('name_ar')} ({days_val:g} يوم) للموظف {current_user.get('name_ar')}",
+                            f"تقديم طلب {chosen_type.get('name_ar')} ({int(days_val)} يوم) للموظف {current_user.get('name_ar')}",
                             by_name=current_user.get("name_ar", ""),
                             by_user_id=user_id,
                         )
@@ -830,7 +819,7 @@ def render_leaves_module(
 
 
 # =====================================================================
-# 4. الجزاءات والمكافآت والسلف (بدون أزرار موافقة داخلية؛ الموافقات عبر الزرار الموحد)
+# 4. الجزاءات والمكافآت والسلف
 # =====================================================================
 def render_penalties_rewards_advances(
     current_user: Dict[str, Any],
@@ -1062,7 +1051,7 @@ def render_penalties_rewards_advances(
 
 
 # =====================================================================
-# 5. البصمة والإجازات الرسمية والـ Payroll (بدون أزرار موافقة إضافي داخلية)
+# 5. البصمة والإجازات الرسمية والـ Payroll
 # =====================================================================
 def render_attendance_and_payroll(
     current_user: Dict[str, Any],
