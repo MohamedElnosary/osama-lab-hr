@@ -157,7 +157,9 @@ def main() -> None:
     if "active_page" not in st.session_state:
         st.session_state["active_page"] = "الداش بورد"
 
-    pending_cnt = get_pending_approvals_count(current_user, leave_requests)
+    pending_cnt = get_pending_approvals_count(
+        current_user, leave_requests, penalties_rewards, advances, attendance_logs
+    )
     approvals_btn_label = f"🔔 الموافقات ({pending_cnt})" if pending_cnt > 0 else "🔔 الموافقات"
 
     with st.sidebar:
@@ -178,7 +180,6 @@ def main() -> None:
             st.session_state["active_page"] = picked_menu
             st.rerun()
 
-        # عنصر الموافقات المستقل بالعدّاد أسفل القائمة مباشرة
         if st.button(approvals_btn_label, key="nav_approvals_btn", use_container_width=True):
             st.session_state["active_page"] = "الموافقات"
             st.rerun()
@@ -209,7 +210,15 @@ def main() -> None:
     elif page == "الإجازات والأرصدة":
         render_leaves_module(current_user, employees, departments, leave_types, leave_balances, leave_requests, org_settings)
     elif page == "الموافقات":
-        render_approvals_inbox(current_user, leave_balances, leave_requests)
+        render_approvals_inbox(
+            current_user,
+            employees,
+            leave_balances,
+            leave_requests,
+            penalties_rewards,
+            advances,
+            attendance_logs,
+        )
     elif page == "الجزاءات والمكافآت والسلف":
         render_penalties_rewards_advances(current_user, employees, penalties_rewards, advances)
     elif page == "البصمة والـ Payroll":
