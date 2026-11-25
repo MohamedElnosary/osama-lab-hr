@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import re
 from typing import Any, Dict, List, Optional
 import streamlit as st
 from supabase import Client, create_client
@@ -52,10 +53,35 @@ def clear_data_cache() -> None:
     st.cache_data.clear()
 
 
+def _extract_missing_column(err_text: str) -> Optional[str]:
+    """استخراج اسم العمود غير الموجود من رسالة خطأ PostgREST إن وُجد."""
+    m1 = re.search(r"column ['\"]([^'\"]+)['\"] of relation", err_text, re.IGNORECASE)
+    if m1:
+        return m1.group(1)
+    m2 = re.search(r"Could not find the ['\"]([^'\"]+)['\"] column", err_text, re.IGNORECASE)
+    if m2:
+        return m2.group(1)
+    return None
+
+
 def insert_record(table_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    """إضافة سجل جديد في جدول محدد."""
+    """إضافة سجل جديد في جدول محدد مع تجاهل أي حقل غير موجود في الجدول تلقائياً."""
     client = get_supabase_client()
-    response = client.table(table_name).insert(payload).execute()
+    working_payload = dict(payload)
+
+    for _ in range(10):
+        try:
+            response = client.table(table_name).insert(working_payload).execute()
+            clear_data_cache()
+            return response.data[0] if response.data else {}
+        except Exception as exc:
+            missing_col = _extract_missing_column(str(exc))
+            if missing_col and missing_col in working_payload:
+                working_payload.pop(missing_col, None)
+                continue
+            raise
+
+    response = client.table(table_name).insert(working_payload).execute()
     clear_data_cache()
     return response.data[0] if response.data else {}
 
