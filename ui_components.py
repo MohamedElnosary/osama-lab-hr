@@ -57,6 +57,84 @@ def _sync_leave_days_state() -> None:
         st.session_state["calculated_leave_days"] = int((e - s).days + 1)
 
 
+def _get_subordinate_employees(
+    current_user: Dict[str, Any],
+    employees: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    إرجاع الموظفين الذين هم تحت سلطة المستخدم الحالي فقط (بدون نفسه وبدون من هم أعلى منه):
+    - المدير العام: كل الموظفين النشطين ما عدا نفسه.
+    - المدير المباشر: التابعون له مباشرة أو ضمن فرعه (باستثناء نفسه والأدوار الأعلى).
+    - الـ Senior: الموظفون التابعون له كـ Senior فقط (باستثناء نفسه).
+    """
+    user_role = (current_user.get("role") or "employee").strip().lower()
+    my_ids = _emp_identifiers(current_user)
+    my_dept = str(current_user.get("department_id") or "")
+
+    if user_role == "general_manager":
+        return [
+            e for e in employees
+            if (e.get("status") or "active") == "active"
+            and not (_emp_identifiers(e) & my_ids)
+        ]
+
+    subordinates: List[Dict[str, Any]] = []
+    for e in employees:
+        if (e.get("status") or "active") != "active":
+            continue
+        e_ids = _emp_identifiers(e)
+        if e_ids & my_ids:
+            continue
+
+        e_role = (e.get("role") or "employee").strip().lower()
+        if user_role == "senior":
+            if str(e.get("senior_id") or "") in my_ids:
+                subordinates.append(e)
+        elif user_role == "manager":
+            if e_role in ("general_manager", "chairman", "vice_chairman"):
+                continue
+            is_direct = str(e.get("direct_manager_id") or "") in my_ids
+            same_dept = bool(my_dept) and str(e.get("department_id") or "") == my_dept
+            if is_direct or same_dept:
+                subordinates.append(e)
+
+    return subordinates
+
+
+def _filter_visible_penalties_rewards(
+    current_user: Dict[str, Any],
+    employees: List[Dict[str, Any]],
+    penalties_rewards: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    تصفية سجل الجزاءات والمكافآت حسب الدور والتبعية:
+    - الموظف: يرى الخاص به فقط.
+    - الـ Senior: يرى الخاص بالتابعين له فقط.
+    - المدير المباشر: يرى الخاص بمن هم تحت سلطته فقط.
+    - المدير العام / رئيس مجلس الإدارة / نائب الرئيس / HR: يرون الكل.
+    """
+    user_role = (current_user.get("role") or "employee").strip().lower()
+    if user_role in ("general_manager", "chairman", "vice_chairman", "hr"):
+        return penalties_rewards
+
+    my_ids = _emp_identifiers(current_user)
+    if user_role == "employee":
+        return [
+            pr for pr in penalties_rewards
+            if str(pr.get("employee_id") or "") in my_ids
+        ]
+
+    sub_emps = _get_subordinate_employees(current_user, employees)
+    allowed_emp_ids = set()
+    for se in sub_emps:
+        allowed_emp_ids.update(_emp_identifiers(se))
+
+    return [
+        pr for pr in penalties_rewards
+        if str(pr.get("employee_id") or "") in allowed_emp_ids
+    ]
+
+
 # =====================================================================
 # تجميع كافة الموافقات المعلقة في مكان واحد (بديل + إجازات + جزاءات/مكافآت + سلف + إضافي)
 # =====================================================================
@@ -74,7 +152,6 @@ def get_pending_items_bundle(
     user_ids = _emp_identifiers(current_user)
     user_role = (current_user.get("role") or "employee").lower()
 
-    # 1. موافقات الإجازات (تذهب أولاً للموظف البديل حتى لو كان المدير المباشر نفسه)
     pending_leaves: List[Dict[str, Any]] = []
     for lr in leave_requests:
         st_val = (lr.get("status") or "").lower()
@@ -93,7 +170,6 @@ def get_pending_items_bundle(
             elif st_val == "pending_manager" and str(lr.get("direct_manager_id") or "") in user_ids:
                 pending_leaves.append(lr)
 
-    # 2. موافقات الجزاءات والمكافآت
     pending_pr: List[Dict[str, Any]] = []
     if perms.get("approve_penalties") or perms.get("approve_rewards"):
         for pr in penalties_rewards:
@@ -107,7 +183,6 @@ def get_pending_items_bundle(
             elif etype == "penalty" and perms.get("approve_penalties"):
                 pending_pr.append(pr)
 
-    # 3. موافقات السلف
     pending_adv: List[Dict[str, Any]] = []
     if perms.get("approve_advances"):
         for adv in advances:
@@ -117,7 +192,6 @@ def get_pending_items_bundle(
             elif user_role in ("manager", "hr") and st_val == "pending":
                 pending_adv.append(adv)
 
-    # 4. موافقات الوقت الإضافي
     pending_ot: List[Dict[str, Any]] = []
     if perms.get("approve_overtime"):
         for att in attendance_logs:
@@ -916,13 +990,8 @@ def render_penalties_rewards_advances(
     st.markdown("### 💰 الجزاءات والمكافآت والسلف")
     perms = get_effective_permissions(current_user)
     user_id = str(current_user.get("id"))
-    user_role = (current_user.get("role") or "employee").lower()
+    user_role = (current_user.get("role") or "employee").strip().lower()
     emp_by_id = {str(e["id"]): e for e in employees if e.get("id")}
-    emp_options = {
-        f"{e.get('name_ar')} (#{e.get('employee_no')})": e
-        for e in employees
-        if (e.get("status") or "active") == "active"
-    }
 
     tab_pr, tab_adv, tab_hr_settle = st.tabs([
         "⚖️ الجزاءات والمكافآت",
@@ -931,80 +1000,125 @@ def render_penalties_rewards_advances(
     ])
 
     with tab_pr:
-        can_add_pr = perms.get("approve_penalties") or perms.get("approve_rewards")
-        if can_add_pr and emp_options:
+        can_create_pr = (
+            user_role in ("general_manager", "manager", "senior")
+            or perms.get("approve_penalties")
+            or perms.get("approve_rewards")
+        ) and not perms.get("is_monitor_only")
+
+        subordinate_emps = _get_subordinate_employees(current_user, employees)
+        emp_options = {
+            f"{e.get('name_ar')} (#{e.get('employee_no')})": e
+            for e in subordinate_emps
+        }
+
+        if can_create_pr:
             st.markdown("#### إضافة جزاء أو مكافأة جديدة")
-            with st.form("add_pr_form", clear_on_submit=True):
-                c1, c2, c3 = st.columns(3)
-                with c1:
-                    sel_emp_lbl = st.selectbox("الموظف", list(emp_options.keys()))
-                with c2:
-                    entry_type = st.selectbox("النوع", ["penalty", "reward"], format_func=lambda x: "جزاء" if x == "penalty" else "مكافأة")
-                with c3:
-                    calc_mode = st.selectbox("طريقة الحساب", ["amount", "days"], format_func=lambda x: "مبلغ مالي (جنيه)" if x == "amount" else "بعدد الأيام")
+            if not emp_options:
+                st.info("لا يوجد موظفون تابعون تحت سلطتك لإضافة جزاء أو مكافأة لهم.")
+            else:
+                with st.form("add_pr_form", clear_on_submit=True):
+                    c1, c2, c3 = st.columns(3)
+                    with c1:
+                        sel_emp_lbl = st.selectbox("الموظف (التابع لسلطتك فقط)", list(emp_options.keys()))
+                    with c2:
+                        entry_type = st.selectbox(
+                            "النوع",
+                            ["penalty", "reward"],
+                            format_func=lambda x: "جزاء" if x == "penalty" else "مكافأة",
+                        )
+                    with c3:
+                        calc_mode = st.selectbox(
+                            "طريقة الحساب",
+                            ["amount", "days"],
+                            format_func=lambda x: "مبلغ مالي (جنيه)" if x == "amount" else "بعدد الأيام",
+                        )
 
-                c4, c5, c6 = st.columns(3)
-                with c4:
-                    val_inp = st.number_input("القيمة (جنيه أو عدد أيام)", min_value=0.5, value=100.0, step=10.0)
-                with c5:
-                    issue_dt = st.date_input("تاريخ الصدور", value=date.today())
-                with c6:
-                    pay_month = st.text_input("شهر الخصم/الإضافة (YYYY-MM)", value=date.today().strftime("%Y-%m"))
+                    c4, c5, c6 = st.columns(3)
+                    with c4:
+                        val_inp = st.number_input("القيمة (جنيه أو عدد أيام)", min_value=0.5, value=100.0, step=10.0)
+                    with c5:
+                        issue_dt = st.date_input("تاريخ الصدور", value=date.today())
+                    with c6:
+                        pay_month = st.text_input("شهر الخصم/الإضافة (YYYY-MM)", value=date.today().strftime("%Y-%m"))
 
-                title_inp = st.text_input("عنوان مختصر", placeholder="مثال: تأخير متكرر أو تميز في الأداء")
-                reason_inp = st.text_area("السبب", placeholder="اكتب السبب باختصار", height=80)
+                    title_inp = st.text_input("عنوان مختصر", placeholder="مثال: تأخير متكرر أو تميز في الأداء")
+                    reason_inp = st.text_area("السبب", placeholder="اكتب السبب باختصار", height=80)
 
-                if st.form_submit_button("حفظ وإرسال للموافقات", type="primary"):
-                    target_emp = emp_options[sel_emp_lbl]
-                    calc_amt = calculate_penalty_or_reward_amount(
-                        float(target_emp.get("base_salary") or 0),
-                        calc_mode,
-                        float(val_inp),
-                    )
-                    insert_record("penalties_rewards", {
-                        "employee_id": target_emp["id"],
-                        "entry_type": entry_type,
-                        "calc_mode": calc_mode,
-                        "issue_date": issue_dt.isoformat(),
-                        "payroll_month": pay_month.strip()[:7],
-                        "value": float(val_inp),
-                        "calculated_amount": calc_amt,
-                        "title": title_inp.strip(),
-                        "reason": reason_inp.strip(),
-                        "status": "pending",
-                        "created_by": user_id,
-                    })
-                    write_audit_log(
-                        "penalties_rewards",
-                        f"create_{entry_type}",
-                        "إضافة",
-                        f"إضافة {'جزاء' if entry_type == 'penalty' else 'مكافأة'} ({calc_amt} ج) للموظف {target_emp.get('name_ar')}",
-                        by_name=current_user.get("name_ar", ""),
-                        by_user_id=user_id,
-                    )
-                    st.success("✅ تم تسجيل الطلب وإرساله إلى صندوق الموافقات الموحّد.")
-                    st.rerun()
+                    if st.form_submit_button("حفظ وإرسال للموافقات", type="primary"):
+                        target_emp = emp_options[sel_emp_lbl]
+                        calc_amt = calculate_penalty_or_reward_amount(
+                            float(target_emp.get("base_salary") or 0),
+                            calc_mode,
+                            float(val_inp),
+                        )
+                        insert_record("penalties_rewards", {
+                            "employee_id": target_emp["id"],
+                            "entry_type": entry_type,
+                            "calc_mode": calc_mode,
+                            "issue_date": issue_dt.isoformat(),
+                            "payroll_month": pay_month.strip()[:7],
+                            "value": float(val_inp),
+                            "calculated_amount": calc_amt,
+                            "title": title_inp.strip(),
+                            "reason": reason_inp.strip(),
+                            "status": "pending",
+                            "created_by": user_id,
+                        })
+                        write_audit_log(
+                            "penalties_rewards",
+                            f"create_{entry_type}",
+                            "إضافة",
+                            f"إضافة {'جزاء' if entry_type == 'penalty' else 'مكافأة'} ({calc_amt} ج) للموظف {target_emp.get('name_ar')}",
+                            by_name=current_user.get("name_ar", ""),
+                            by_user_id=user_id,
+                        )
+                        st.success("✅ تم تسجيل الطلب وإرساله إلى صندوق الموافقات الموحّد.")
+                        st.rerun()
 
         st.markdown("#### سجل الجزاءات والمكافآت")
-        if penalties_rewards:
-            st.dataframe(
-                [
-                    {
-                        "النوع": "جزاء" if pr.get("entry_type") == "penalty" else "مكافأة",
-                        "الموظف": emp_by_id.get(str(pr.get("employee_id") or ""), {}).get("name_ar", ""),
-                        "القيمة": pr.get("value"),
-                        "طريقة الحساب": "أيام" if pr.get("calc_mode") == "days" else "مبلغ مالي",
-                        "الإجمالي (ج)": pr.get("calculated_amount"),
-                        "الشهر": pr.get("payroll_month"),
-                        "العنوان": pr.get("title") or "—",
-                        "السبب": pr.get("reason") or "—",
-                        "الحالة": pr.get("status"),
-                    }
-                    for pr in penalties_rewards
-                ],
-                use_container_width=True,
-                hide_index=True,
-            )
+        visible_pr = _filter_visible_penalties_rewards(current_user, employees, penalties_rewards)
+        if visible_pr:
+            pr_rows = []
+            for pr in visible_pr:
+                emp_o = emp_by_id.get(str(pr.get("employee_id") or ""), {})
+                kind_ar = "جزاء" if (pr.get("entry_type") or "").lower() == "penalty" else "مكافأة"
+                month_val = str(pr.get("payroll_month") or pr.get("issue_date") or "")[:7]
+                pr_rows.append({
+                    "الموظف": emp_o.get("name_ar") or "غير محدد",
+                    "النوع": kind_ar,
+                    "الشهر": month_val or "—",
+                    "القيمة": pr.get("value"),
+                    "طريقة الحساب": "أيام" if pr.get("calc_mode") == "days" else "مبلغ مالي",
+                    "الإجمالي (ج)": pr.get("calculated_amount"),
+                    "العنوان": pr.get("title") or "—",
+                    "السبب": pr.get("reason") or "—",
+                    "الحالة": pr.get("status"),
+                })
+
+            f1, f2, f3 = st.columns(3)
+            emp_opts = ["الكل"] + sorted({r["الموظف"] for r in pr_rows})
+            type_opts = ["الكل", "جزاء", "مكافأة"]
+            month_opts = ["الكل"] + sorted({r["الشهر"] for r in pr_rows if r["الشهر"] != "—"}, reverse=True)
+
+            sel_emp_pr = f1.selectbox("فلتر باسم الموظف", emp_opts, key="pr_f_emp")
+            sel_type_pr = f2.selectbox("فلتر بالنوع (مكافأة / جزاء)", type_opts, key="pr_f_type")
+            sel_month_pr = f3.selectbox("فلتر بالشهر", month_opts, key="pr_f_month")
+
+            filtered_pr = [
+                r for r in pr_rows
+                if (sel_emp_pr == "الكل" or r["الموظف"] == sel_emp_pr)
+                and (sel_type_pr == "الكل" or r["النوع"] == sel_type_pr)
+                and (sel_month_pr == "الكل" or r["الشهر"] == sel_month_pr)
+            ]
+
+            st.caption(f"عدد السجلات المعروضة: {len(filtered_pr)} من {len(pr_rows)}")
+            if filtered_pr:
+                st.dataframe(filtered_pr, use_container_width=True, hide_index=True)
+            else:
+                st.info("لا توجد سجلات مطابقة للفلاتر المختارة.")
+        else:
+            st.info("لا توجد سجلات جزاءات أو مكافآت ضمن نطاق صلاحياتك حالياً.")
 
     with tab_adv:
         st.markdown("#### تقديم طلب سلفة (في نفس الشهر أو مقسطة بدون كسور)")
