@@ -1795,8 +1795,8 @@ def render_attendance_and_payroll(
                 "دخول (check_in)": cin_disp,
                 "انصراف (check_out)": cout_disp,
                 "تأخير دخول (دقيقة)": bd["late_in"],
-                "مبكر دخول (دقيقة)": bd["early_in"],
-                "مبكر انصراف (دقيقة)": bd["early_out"],
+                "اضافى دخول (دقيقة)": bd["early_in"],
+                " انصراف مبكر (دقيقة)": bd["early_out"],
                 "إضافي انصراف (دقيقة)": bd["overtime_out"],
             })
 
