@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 import io
 import pandas as pd
 import streamlit as st
@@ -38,8 +38,103 @@ def _shift_map(shifts: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     return {str(s["id"]): s for s in shifts if s.get("id")}
 
 
+def _emp_identifiers(emp: Dict[str, Any]) -> set:
+    ids = set()
+    if emp.get("id"):
+        ids.add(str(emp["id"]))
+    if emp.get("team_user_id"):
+        ids.add(str(emp["team_user_id"]))
+    return ids
+
+
+def get_pending_leaves_for_user(
+    current_user: Dict[str, Any],
+    leave_requests: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """إرجاع طلبات الإجازات المنتظرة لاعتماد المستخدم الحالي تحديداً."""
+    perms = get_effective_permissions(current_user)
+    if perms.get("is_monitor_only") or not perms.get("approve_leaves"):
+        return []
+
+    user_ids = _emp_identifiers(current_user)
+    user_role = (current_user.get("role") or "employee").lower()
+
+    pending = []
+    for lr in leave_requests:
+        st_val = (lr.get("status") or "").lower()
+        if user_role == "general_manager" and st_val in ("pending_senior", "pending_manager", "pending_gm", "pending"):
+            pending.append(lr)
+        elif st_val == "pending_senior" and str(lr.get("senior_id") or "") in user_ids:
+            pending.append(lr)
+        elif st_val == "pending_manager" and str(lr.get("direct_manager_id") or "") in user_ids:
+            pending.append(lr)
+    return pending
+
+
+def get_pending_approvals_count(
+    current_user: Dict[str, Any],
+    leave_requests: List[Dict[str, Any]],
+) -> int:
+    """حساب عدد الإشعارات/الموافقات المعلقة للمستخدم الحالي."""
+    return len(get_pending_leaves_for_user(current_user, leave_requests))
+
+
+def _filter_visible_leave_requests(
+    current_user: Dict[str, Any],
+    employees: List[Dict[str, Any]],
+    leave_requests: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    تصفية سجل الإجازات حسب الصلاحية والتبعية:
+    - المدير العام، رئيس مجلس الإدارة/نائب الرئيس، والـ HR: يرون الكل.
+    - المدير المباشر / مدير الفرع: يرى إجازاته + من يرتبط به مباشرة أو يتبع لفرعه.
+    - الـ Senior: يرى إجازاته + من يتبع له كـ Senior.
+    - الموظف العادي: يرى إجازاته فقط.
+    """
+    user_role = (current_user.get("role") or "employee").lower()
+    if user_role in ("general_manager", "chairman", "vice_chairman", "hr"):
+        return leave_requests
+
+    my_ids = _emp_identifiers(current_user)
+    emp_by_any_id: Dict[str, Dict[str, Any]] = {}
+    for e in employees:
+        for k in _emp_identifiers(e):
+            emp_by_any_id[k] = e
+
+    subordinate_ids = set(my_ids)
+    for e in employees:
+        e_ids = _emp_identifiers(e)
+        if user_role == "senior":
+            if str(e.get("senior_id") or "") in my_ids:
+                subordinate_ids.update(e_ids)
+        elif user_role == "manager":
+            same_dept = (
+                bool(current_user.get("department_id"))
+                and str(e.get("department_id") or "") == str(current_user.get("department_id") or "")
+            )
+            is_direct = str(e.get("direct_manager_id") or "") in my_ids
+            if is_direct or same_dept:
+                subordinate_ids.update(e_ids)
+
+    visible = []
+    for lr in leave_requests:
+        req_emp_id = str(lr.get("employee_id") or "")
+        req_user_id = str(lr.get("employee_user_id") or "")
+        req_senior_id = str(lr.get("senior_id") or "")
+        req_mgr_id = str(lr.get("direct_manager_id") or "")
+
+        if (
+            req_emp_id in subordinate_ids
+            or (req_user_id and req_user_id in subordinate_ids)
+            or (req_senior_id and req_senior_id in my_ids)
+            or (req_mgr_id and req_mgr_id in my_ids)
+        ):
+            visible.append(lr)
+    return visible
+
+
 # =====================================================================
-# 1. الداش بورد التنفيذية (ورديات صباحي/مسائي + كشف العجز + إجازات + تأخيرات)
+# 1. الداش بورد التنفيذية
 # =====================================================================
 def render_dashboard(
     employees: List[Dict[str, Any]],
@@ -170,7 +265,133 @@ def render_dashboard(
 
 
 # =====================================================================
-# 2. منظومة الإجازات والأرصدة والموافقات (Senior -> مدير -> مدير عام)
+# 2. شاشة صندوق الموافقات المستقلة
+# =====================================================================
+def render_approvals_inbox(
+    current_user: Dict[str, Any],
+    leave_balances: List[Dict[str, Any]],
+    leave_requests: List[Dict[str, Any]],
+) -> None:
+    st.markdown("### ✅ صندوق الموافقات")
+    perms = get_effective_permissions(current_user)
+    user_id = str(current_user.get("id"))
+    user_role = (current_user.get("role") or "employee").lower()
+
+    if perms.get("is_monitor_only"):
+        st.info("حساب رئيس مجلس الإدارة / نائب الرئيس مخصص للمتابعة والاطلاع فقط بدون صلاحية موافقات.")
+        return
+
+    if not perms.get("approve_leaves"):
+        st.info("لا توجد طلبات موافقات مفعّلة لحسابك حالياً.")
+        return
+
+    bal_by_emp: Dict[str, Dict[str, Any]] = {}
+    for b in leave_balances:
+        if b.get("employee_id"):
+            bal_by_emp[str(b["employee_id"])] = b
+        if b.get("team_user_id"):
+            bal_by_emp[str(b["team_user_id"])] = b
+
+    pending_for_me = get_pending_leaves_for_user(current_user, leave_requests)
+    st.metric("إشعارات الموافقات المنتظرة", len(pending_for_me))
+
+    if not pending_for_me:
+        st.success("لا توجد طلبات إجازات منتظرة لاعتمادك حالياً.")
+        return
+
+    for lr in pending_for_me:
+        st_val = (lr.get("status") or "").lower()
+        with st.container(border=True):
+            st.write(
+                f"**{lr.get('employee_name')}** — {lr.get('type_name')} | "
+                f"من `{str(lr.get('start_date'))[:10]}` إلى `{str(lr.get('end_date'))[:10]}` "
+                f"(**{lr.get('days')} يوم**) | الحالة: `{st_val}`"
+            )
+            if lr.get("reason"):
+                st.caption(f"السبب: {lr.get('reason')}")
+            if lr.get("attachment_url"):
+                st.markdown(f"[📎 عرض التقرير المرفق]({lr.get('attachment_url')})")
+
+            note_inp = st.text_input("ملاحظة الاعتماد/الرفض", key=f"inbox_note_lr_{lr['id']}")
+            col_a, col_r, _ = st.columns([1.2, 1.2, 4])
+
+            with col_a:
+                if st.button("✅ موافقة", key=f"inbox_app_lr_{lr['id']}", type="primary"):
+                    approvals = list(lr.get("approvals") or [])
+                    if st_val == "pending_senior":
+                        stage = "senior"
+                        next_status = "pending_gm" if not lr.get("direct_manager_id") else "pending_manager"
+                    elif st_val == "pending_manager":
+                        stage = "manager"
+                        next_status = "pending_gm"
+                    else:
+                        stage = "gm"
+                        next_status = "approved"
+
+                    approvals.append({
+                        "at": datetime.utcnow().isoformat() + "Z",
+                        "name": current_user.get("name_ar"),
+                        "stage": stage,
+                        "decision": "approved",
+                        "notes": note_inp,
+                    })
+                    update_record("leave_requests", lr["id"], {
+                        "status": next_status,
+                        "approvals": approvals,
+                    })
+
+                    if next_status == "approved" and lr.get("deducts"):
+                        emp_key = str(lr.get("employee_id"))
+                        bal_rec = bal_by_emp.get(emp_key) or bal_by_emp.get(str(lr.get("employee_user_id") or ""))
+                        if bal_rec and bal_rec.get("id"):
+                            bf = (lr.get("balance_field") or "annual").lower()
+                            d_amt = float(lr.get("days") or 0)
+                            if bf == "casual":
+                                new_used = round_half_up_2(float(bal_rec.get("used_casual") or 0) + d_amt)
+                                update_record("leave_balances", bal_rec["id"], {"used_casual": new_used})
+                            else:
+                                new_used = round_half_up_2(float(bal_rec.get("used_annual") or 0) + d_amt)
+                                update_record("leave_balances", bal_rec["id"], {"used_annual": new_used})
+
+                    write_audit_log(
+                        "leave_requests",
+                        f"{stage}_approved",
+                        "اعتماد",
+                        f"اعتماد طلب إجازة {lr.get('employee_name')} ({lr.get('type_name')}) -> {next_status}",
+                        by_name=current_user.get("name_ar", ""),
+                        by_user_id=user_id,
+                    )
+                    st.rerun()
+
+            with col_r:
+                if st.button("❌ رفض", key=f"inbox_rej_lr_{lr['id']}"):
+                    approvals = list(lr.get("approvals") or [])
+                    stage = "senior" if st_val == "pending_senior" else ("manager" if st_val == "pending_manager" else "gm")
+                    rej_status = f"rejected_{stage}"
+                    approvals.append({
+                        "at": datetime.utcnow().isoformat() + "Z",
+                        "name": current_user.get("name_ar"),
+                        "stage": stage,
+                        "decision": "rejected",
+                        "notes": note_inp,
+                    })
+                    update_record("leave_requests", lr["id"], {
+                        "status": rej_status,
+                        "approvals": approvals,
+                    })
+                    write_audit_log(
+                        "leave_requests",
+                        rej_status,
+                        "رفض",
+                        f"رفض طلب إجازة {lr.get('employee_name')} ({lr.get('type_name')})",
+                        by_name=current_user.get("name_ar", ""),
+                        by_user_id=user_id,
+                    )
+                    st.rerun()
+
+
+# =====================================================================
+# 3. منظومة الإجازات والأرصدة (مقيدة الصلاحيات حسب الدور والتبعية)
 # =====================================================================
 def render_leaves_module(
     current_user: Dict[str, Any],
@@ -181,7 +402,7 @@ def render_leaves_module(
     leave_requests: List[Dict[str, Any]],
     org_settings: Dict[str, Any],
 ) -> None:
-    st.markdown("### 🗓️ نظام الإجازات والأرصدة والموافقات")
+    st.markdown("### 🗓️ نظام الإجازات والأرصدة")
     perms = get_effective_permissions(current_user)
     dept_names = _dept_map(departments)
     user_id = str(current_user.get("id"))
@@ -199,19 +420,20 @@ def render_leaves_module(
     annual_rem = float(my_bal.get("annual") or 0) - float(my_bal.get("used_annual") or 0)
     casual_rem = float(my_bal.get("casual") or 0) - float(my_bal.get("used_casual") or 0)
 
+    # رصيد الموظف الحالي فقط
     b1, b2, b3 = st.columns(3)
-    b1.metric("رصيد الاعتيادي/السنوي المتبقي", round_half_up_2(annual_rem))
-    b2.metric("رصيد العارضة المتبقي", round_half_up_2(casual_rem))
+    b1.metric("رصيدي الاعتيادي/السنوي المتبقي", round_half_up_2(annual_rem))
+    b2.metric("رصيدي العارضة المتبقي", round_half_up_2(casual_rem))
     b3.metric("تاريخ التعيين", str(current_user.get("hire_date") or "غير محدد")[:10])
 
-    tab_req, tab_approve, tab_all, tab_balances = st.tabs([
-        "➕ تقديم طلب إجازة",
-        "✅ صندوق الموافقات",
-        "📋 سجل الإجازات",
-        "⚖️ أرصدة الموظفين والتجديد",
-    ])
+    can_view_all_balances = user_role in ("general_manager", "chairman", "vice_chairman", "hr")
+    tab_titles = ["➕ تقديم طلب إجازة", "📋 سجل الإجازات"]
+    if can_view_all_balances:
+        tab_titles.append("⚖️ أرصدة جميع الموظفين والتجديد")
 
-    with tab_req:
+    tabs = st.tabs(tab_titles)
+
+    with tabs[0]:
         active_types = [lt for lt in leave_types if lt.get("active", True)]
         if not active_types:
             st.warning("لا توجد أنواع إجازات مفعّلة حالياً.")
@@ -303,117 +525,9 @@ def render_leaves_module(
                         st.success("✅ تم إرسال طلب الإجازة بنجاح وإدراجه في مسار الموافقات.")
                         st.rerun()
 
-    with tab_approve:
-        if perms.get("is_monitor_only"):
-            st.info("حساب رئيس مجلس الإدارة / نائب الرئيس مخصص للمتابعة والاطلاع فقط بدون صلاحية موافقات.")
-        elif not perms.get("approve_leaves"):
-            st.info("لا توجد صلاحية اعتماد إجازات مفعّلة على حسابك.")
-        else:
-            pending_for_me = []
-            for lr in leave_requests:
-                st_val = (lr.get("status") or "").lower()
-                if user_role == "general_manager" and st_val in ("pending_senior", "pending_manager", "pending_gm", "pending"):
-                    pending_for_me.append(lr)
-                elif st_val == "pending_senior" and str(lr.get("senior_id") or "") in (user_id, user_team_id):
-                    pending_for_me.append(lr)
-                elif st_val == "pending_manager" and str(lr.get("direct_manager_id") or "") in (user_id, user_team_id):
-                    pending_for_me.append(lr)
-
-            if not pending_for_me:
-                st.success("لا توجد طلبات إجازات منتظرة لاعتمادك حالياً.")
-            else:
-                for lr in pending_for_me:
-                    st_val = (lr.get("status") or "").lower()
-                    with st.container(border=True):
-                        st.write(
-                            f"**{lr.get('employee_name')}** — {lr.get('type_name')} | "
-                            f"من `{str(lr.get('start_date'))[:10]}` إلى `{str(lr.get('end_date'))[:10]}` "
-                            f"(**{lr.get('days')} يوم**) | الحالة: `{st_val}`"
-                        )
-                        if lr.get("reason"):
-                            st.caption(f"السبب: {lr.get('reason')}")
-                        if lr.get("attachment_url"):
-                            st.markdown(f"[📎 عرض التقرير المرفق]({lr.get('attachment_url')})")
-
-                        note_inp = st.text_input("ملاحظة الاعتماد/الرفض", key=f"note_lr_{lr['id']}")
-                        col_a, col_r, _ = st.columns([1.2, 1.2, 4])
-
-                        with col_a:
-                            if st.button("✅ موافقة", key=f"app_lr_{lr['id']}", type="primary"):
-                                approvals = list(lr.get("approvals") or [])
-                                if st_val == "pending_senior":
-                                    stage = "senior"
-                                    next_status = "pending_gm" if not lr.get("direct_manager_id") else "pending_manager"
-                                elif st_val == "pending_manager":
-                                    stage = "manager"
-                                    next_status = "pending_gm"
-                                else:
-                                    stage = "gm"
-                                    next_status = "approved"
-
-                                approvals.append({
-                                    "at": datetime.utcnow().isoformat() + "Z",
-                                    "name": current_user.get("name_ar"),
-                                    "stage": stage,
-                                    "decision": "approved",
-                                    "notes": note_inp,
-                                })
-                                update_record("leave_requests", lr["id"], {
-                                    "status": next_status,
-                                    "approvals": approvals,
-                                })
-
-                                if next_status == "approved" and lr.get("deducts"):
-                                    emp_key = str(lr.get("employee_id"))
-                                    bal_rec = bal_by_emp.get(emp_key) or bal_by_emp.get(str(lr.get("employee_user_id") or ""))
-                                    if bal_rec and bal_rec.get("id"):
-                                        bf = (lr.get("balance_field") or "annual").lower()
-                                        d_amt = float(lr.get("days") or 0)
-                                        if bf == "casual":
-                                            new_used = round_half_up_2(float(bal_rec.get("used_casual") or 0) + d_amt)
-                                            update_record("leave_balances", bal_rec["id"], {"used_casual": new_used})
-                                        else:
-                                            new_used = round_half_up_2(float(bal_rec.get("used_annual") or 0) + d_amt)
-                                            update_record("leave_balances", bal_rec["id"], {"used_annual": new_used})
-
-                                write_audit_log(
-                                    "leave_requests",
-                                    f"{stage}_approved",
-                                    "اعتماد",
-                                    f"اعتماد طلب إجازة {lr.get('employee_name')} ({lr.get('type_name')}) -> {next_status}",
-                                    by_name=current_user.get("name_ar", ""),
-                                    by_user_id=user_id,
-                                )
-                                st.rerun()
-
-                        with col_r:
-                            if st.button("❌ رفض", key=f"rej_lr_{lr['id']}"):
-                                approvals = list(lr.get("approvals") or [])
-                                stage = "senior" if st_val == "pending_senior" else ("manager" if st_val == "pending_manager" else "gm")
-                                rej_status = f"rejected_{stage}"
-                                approvals.append({
-                                    "at": datetime.utcnow().isoformat() + "Z",
-                                    "name": current_user.get("name_ar"),
-                                    "stage": stage,
-                                    "decision": "rejected",
-                                    "notes": note_inp,
-                                })
-                                update_record("leave_requests", lr["id"], {
-                                    "status": rej_status,
-                                    "approvals": approvals,
-                                })
-                                write_audit_log(
-                                    "leave_requests",
-                                    rej_status,
-                                    "رفض",
-                                    f"رفض طلب إجازة {lr.get('employee_name')} ({lr.get('type_name')})",
-                                    by_name=current_user.get("name_ar", ""),
-                                    by_user_id=user_id,
-                                )
-                                st.rerun()
-
-    with tab_all:
-        if leave_requests:
+    with tabs[1]:
+        visible_requests = _filter_visible_leave_requests(current_user, employees, leave_requests)
+        if visible_requests:
             st.dataframe(
                 [
                     {
@@ -426,93 +540,94 @@ def render_leaves_module(
                         "الحالة": lr.get("status"),
                         "السبب": lr.get("reason") or "—",
                     }
-                    for lr in leave_requests
+                    for lr in visible_requests
                 ],
                 use_container_width=True,
                 hide_index=True,
             )
         else:
-            st.info("لا توجد طلبات إجازات مسجلة حتى الآن.")
+            st.info("لا توجد طلبات إجازات ضمن نطاق صلاحياتك حالياً.")
 
-    with tab_balances:
-        st.markdown("#### احتساب الأرصدة النسبية وتجديد بداية السنة")
-        admin_yr = str(org_settings.get("admin_year") or date.today().year)
-        def_ann = float(org_settings.get("default_annual") or 15)
-        def_cas = float(org_settings.get("default_casual") or 6)
+    if can_view_all_balances and len(tabs) > 2:
+        with tabs[2]:
+            st.markdown("#### أرصدة جميع الموظفين، الاحتساب النسبي، وتجديد بداية السنة")
+            admin_yr = str(org_settings.get("admin_year") or date.today().year)
+            def_ann = float(org_settings.get("default_annual") or 15)
+            def_cas = float(org_settings.get("default_casual") or 6)
 
-        c_r1, c_r2 = st.columns([2, 2])
-        with c_r1:
-            is_reset_mode = st.checkbox("تفعيل وضع (تصفير/تجديد بداية السنة للجميع بالتساوي)", value=False)
-        with c_r2:
-            if perms.get("manage_settings") or perms.get("manage_payroll"):
-                if st.button("⚡ تحديث/توليد أرصدة جميع الموظفين", type="primary"):
-                    for emp in employees:
-                        if (emp.get("status") or "active") != "active":
-                            continue
-                        ann_ent, cas_ent, _ = calculate_prorated_leave_entitlement(
-                            emp.get("hire_date"),
-                            admin_year=admin_yr,
-                            annual_base=def_ann,
-                            casual_base=def_cas,
-                            is_annual_reset=is_reset_mode,
+            c_r1, c_r2 = st.columns([2, 2])
+            with c_r1:
+                is_reset_mode = st.checkbox("تفعيل وضع (تصفير/تجديد بداية السنة للجميع بالتساوي)", value=False)
+            with c_r2:
+                if perms.get("manage_settings") or perms.get("manage_payroll"):
+                    if st.button("⚡ تحديث/توليد أرصدة جميع الموظفين", type="primary"):
+                        for emp in employees:
+                            if (emp.get("status") or "active") != "active":
+                                continue
+                            ann_ent, cas_ent, _ = calculate_prorated_leave_entitlement(
+                                emp.get("hire_date"),
+                                admin_year=admin_yr,
+                                annual_base=def_ann,
+                                casual_base=def_cas,
+                                is_annual_reset=is_reset_mode,
+                            )
+                            existing_b = bal_by_emp.get(str(emp["id"])) or bal_by_emp.get(str(emp.get("team_user_id") or ""))
+                            if existing_b and existing_b.get("id"):
+                                payload_b = {
+                                    "id": existing_b["id"],
+                                    "employee_id": emp["id"],
+                                    "team_user_id": emp.get("team_user_id"),
+                                    "admin_year": admin_yr,
+                                    "annual": ann_ent,
+                                    "casual": cas_ent,
+                                    "used_annual": 0 if is_reset_mode else float(existing_b.get("used_annual") or 0),
+                                    "used_casual": 0 if is_reset_mode else float(existing_b.get("used_casual") or 0),
+                                }
+                                upsert_record("leave_balances", payload_b, on_conflict="id")
+                            else:
+                                insert_record("leave_balances", {
+                                    "employee_id": emp["id"],
+                                    "team_user_id": emp.get("team_user_id"),
+                                    "admin_year": admin_yr,
+                                    "annual": ann_ent,
+                                    "casual": cas_ent,
+                                    "used_annual": 0,
+                                    "used_casual": 0,
+                                })
+                        write_audit_log(
+                            "leave_balances",
+                            "sync_leave_balances",
+                            "تحديث",
+                            f"تحديث أرصدة الإجازات للسنة {admin_yr} (وضع التجديد السنوي: {is_reset_mode})",
+                            by_name=current_user.get("name_ar", ""),
+                            by_user_id=user_id,
                         )
-                        existing_b = bal_by_emp.get(str(emp["id"])) or bal_by_emp.get(str(emp.get("team_user_id") or ""))
-                        if existing_b and existing_b.get("id"):
-                            payload_b = {
-                                "id": existing_b["id"],
-                                "employee_id": emp["id"],
-                                "team_user_id": emp.get("team_user_id"),
-                                "admin_year": admin_yr,
-                                "annual": ann_ent,
-                                "casual": cas_ent,
-                                "used_annual": 0 if is_reset_mode else float(existing_b.get("used_annual") or 0),
-                                "used_casual": 0 if is_reset_mode else float(existing_b.get("used_casual") or 0),
-                            }
-                            upsert_record("leave_balances", payload_b, on_conflict="id")
-                        else:
-                            insert_record("leave_balances", {
-                                "employee_id": emp["id"],
-                                "team_user_id": emp.get("team_user_id"),
-                                "admin_year": admin_yr,
-                                "annual": ann_ent,
-                                "casual": cas_ent,
-                                "used_annual": 0,
-                                "used_casual": 0,
-                            })
-                    write_audit_log(
-                        "leave_balances",
-                        "sync_leave_balances",
-                        "تحديث",
-                        f"تحديث أرصدة الإجازات للسنة {admin_yr} (وضع التجديد السنوي: {is_reset_mode})",
-                        by_name=current_user.get("name_ar", ""),
-                        by_user_id=user_id,
-                    )
-                    st.success("✅ تم تحديث أرصدة الموظفين بنجاح.")
-                    st.rerun()
+                        st.success("✅ تم تحديث أرصدة الموظفين بنجاح.")
+                        st.rerun()
 
-        bal_rows = []
-        for emp in employees:
-            b = bal_by_emp.get(str(emp.get("id"))) or bal_by_emp.get(str(emp.get("team_user_id") or "")) or {}
-            ann_t = float(b.get("annual") or 0)
-            ann_u = float(b.get("used_annual") or 0)
-            cas_t = float(b.get("casual") or 0)
-            cas_u = float(b.get("used_casual") or 0)
-            bal_rows.append({
-                "الرقم الوظيفي": emp.get("employee_no"),
-                "الاسم": emp.get("name_ar"),
-                "تاريخ التعيين": str(emp.get("hire_date") or "")[:10],
-                "اعتيادي/سنوي مستحق": ann_t,
-                "مستخدم": ann_u,
-                "متبقي": round_half_up_2(ann_t - ann_u),
-                "عارضة مستحق": cas_t,
-                "مستخدم عارضة": cas_u,
-                "متبقي عارضة": round_half_up_2(cas_t - cas_u),
-            })
-        st.dataframe(bal_rows, use_container_width=True, hide_index=True)
+            bal_rows = []
+            for emp in employees:
+                b = bal_by_emp.get(str(emp.get("id"))) or bal_by_emp.get(str(emp.get("team_user_id") or "")) or {}
+                ann_t = float(b.get("annual") or 0)
+                ann_u = float(b.get("used_annual") or 0)
+                cas_t = float(b.get("casual") or 0)
+                cas_u = float(b.get("used_casual") or 0)
+                bal_rows.append({
+                    "الرقم الوظيفي": emp.get("employee_no"),
+                    "الاسم": emp.get("name_ar"),
+                    "تاريخ التعيين": str(emp.get("hire_date") or "")[:10],
+                    "اعتيادي/سنوي مستحق": ann_t,
+                    "مستخدم": ann_u,
+                    "متبقي": round_half_up_2(ann_t - ann_u),
+                    "عارضة مستحق": cas_t,
+                    "مستخدم عارضة": cas_u,
+                    "متبقي عارضة": round_half_up_2(cas_t - cas_u),
+                })
+            st.dataframe(bal_rows, use_container_width=True, hide_index=True)
 
 
 # =====================================================================
-# 3. الجزاءات والمكافآت والسلف (مالي/أيام + تجميع السلف + زر السداد للـ HR)
+# 4. الجزاءات والمكافآت والسلف
 # =====================================================================
 def render_penalties_rewards_advances(
     current_user: Dict[str, Any],
@@ -765,7 +880,7 @@ def render_penalties_rewards_advances(
 
 
 # =====================================================================
-# 4. البصمة والوقت الإضافي والإجازات الرسمية والـ Payroll والأرشيف
+# 5. البصمة والوقت الإضافي والإجازات الرسمية والـ Payroll والأرشيف
 # =====================================================================
 def render_attendance_and_payroll(
     current_user: Dict[str, Any],
@@ -1056,7 +1171,7 @@ def render_attendance_and_payroll(
 
 
 # =====================================================================
-# 5. التقييم (KPIs نصف سنوي وسنوي + ملخص الأداء الآلي) والتقارير
+# 6. التقييم (KPIs نصف سنوي وسنوي + ملخص الأداء الآلي) والتقارير
 # =====================================================================
 def render_kpis_and_reports(
     current_user: Dict[str, Any],
@@ -1264,7 +1379,7 @@ def render_kpis_and_reports(
 
 
 # =====================================================================
-# 6. الموظفون والفروع والورديات والصلاحيات والإعدادات
+# 7. الموظفون والفروع والورديات والصلاحيات والإعدادات
 # =====================================================================
 def render_admin_and_staff(
     current_user: Dict[str, Any],
