@@ -158,7 +158,12 @@ def main() -> None:
         st.session_state["active_page"] = "الداش بورد"
 
     pending_cnt = get_pending_approvals_count(
-        current_user, leave_requests, penalties_rewards, advances, attendance_logs
+        current_user,
+        leave_requests,
+        penalties_rewards,
+        advances,
+        attendance_logs,
+        employees=employees,
     )
     approvals_btn_label = f"🔔 الموافقات ({pending_cnt})" if pending_cnt > 0 else "🔔 الموافقات"
 
