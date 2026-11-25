@@ -267,6 +267,20 @@ def get_employee_monthly_advances_summary(
     }
 
 
+def _expand_holiday_days(hol: Dict[str, Any]) -> List[date]:
+    """توسيع سجل الإجازة الرسمية إلى قائمة التواريخ المشمولة (من start_date إلى end_date أو holiday_date)."""
+    s_dt = _parse_dt_date(hol.get("start_date")) or _parse_dt_date(hol.get("holiday_date"))
+    e_dt = _parse_dt_date(hol.get("end_date")) or s_dt
+    if not s_dt or not e_dt or e_dt < s_dt:
+        return []
+    days: List[date] = []
+    cur = s_dt
+    while cur <= e_dt:
+        days.append(cur)
+        cur += timedelta(days=1)
+    return days
+
+
 def compute_employee_monthly_payroll(
     employee: Dict[str, Any],
     payroll_month: str,
@@ -280,7 +294,7 @@ def compute_employee_monthly_payroll(
 ) -> Dict[str, Any]:
     """
     حساب المرتب الشهري الفعلي للموظف (لكل الموظفين بلا استثناء):
-    - المرتب الأساسي + إجازات رسمية (+يوم لكل إجازة مفعّلة) + المكافآت المعتمدة + الوقت الإضافي المعتمد
+    - المرتب الأساسي + إجازات رسمية (+يوم لكل إجازة مفعّلة ومضافة للمرتب) + المكافآت المعتمدة + الوقت الإضافي المعتمد
     - ناقص: خصم السلف المستحقة للشهر + الجزاءات المعتمدة + خصم التأخير والانصراف المبكر (بعد خصم السماح).
     """
     ym = str(payroll_month or "").strip()[:7]
@@ -302,20 +316,24 @@ def compute_employee_monthly_payroll(
     seen_holiday_dates = set()
     for hol in official_holidays:
         is_act = hol.get("active", True)
-        add_flag = hol.get("add_day_to_payroll")
-        if add_flag is None:
-            add_flag = False
-        if not (is_act is not False and bool(add_flag)):
+        add_flag = bool(hol.get("add_day_to_payroll", False))
+        if not (is_act is not False and add_flag):
             continue
-        h_dt_obj = _parse_dt_date(hol.get("holiday_date"))
-        h_raw_str = str(hol.get("holiday_date") or "")[:7]
-        in_cycle = bool(h_dt_obj and (cycle_start <= h_dt_obj <= cycle_end))
-        in_ym = (h_raw_str == ym) or bool(h_dt_obj and h_dt_obj.strftime("%Y-%m") == ym)
-        if in_cycle or in_ym:
-            key_d = h_dt_obj.isoformat() if h_dt_obj else str(hol.get("id") or hol.get("name_ar") or "")
-            if key_d not in seen_holiday_dates:
-                seen_holiday_dates.add(key_d)
-                active_holidays_in_month += 1
+        expanded = _expand_holiday_days(hol)
+        if expanded:
+            for d_item in expanded:
+                in_cycle = cycle_start <= d_item <= cycle_end
+                in_ym = d_item.strftime("%Y-%m") == ym
+                if (in_cycle or in_ym) and d_item.isoformat() not in seen_holiday_dates:
+                    seen_holiday_dates.add(d_item.isoformat())
+                    active_holidays_in_month += 1
+        else:
+            h_raw_str = str(hol.get("holiday_date") or "")[:7]
+            if h_raw_str == ym:
+                key_h = str(hol.get("id") or hol.get("name_ar") or "")
+                if key_h not in seen_holiday_dates:
+                    seen_holiday_dates.add(key_h)
+                    active_holidays_in_month += 1
 
     holiday_bonus = _round2(daily_rate * active_holidays_in_month)
 
