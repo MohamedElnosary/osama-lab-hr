@@ -57,6 +57,38 @@ def _sync_leave_days_state() -> None:
         st.session_state["calculated_leave_days"] = int((e - s).days + 1)
 
 
+def _build_advance_installments_preview(
+    total_amount: float,
+    start_ym: str,
+    installments_count: int,
+    monthly_installment: float,
+    last_installment_amount: float,
+) -> List[Dict[str, Any]]:
+    """إنشاء جدول معاينة مرتب بالشهور لأقساط السلفة."""
+    try:
+        parts = start_ym.strip()[:7].split("-")
+        yr = int(parts[0])
+        mo = int(parts[1])
+    except Exception:
+        today_dt = date.today()
+        yr = today_dt.year
+        mo = today_dt.month
+
+    rows: List[Dict[str, Any]] = []
+    for idx in range(1, max(1, int(installments_count)) + 1):
+        amt = last_installment_amount if idx == int(installments_count) else monthly_installment
+        rows.append({
+            "رقم القسط": idx,
+            "الشهر": f"{yr:04d}-{mo:02d}",
+            "قيمة القسط (ج)": amt,
+        })
+        mo += 1
+        if mo > 12:
+            mo = 1
+            yr += 1
+    return rows
+
+
 def _get_subordinate_employees(
     current_user: Dict[str, Any],
     employees: List[Dict[str, Any]],
@@ -106,13 +138,7 @@ def _filter_visible_penalties_rewards(
     employees: List[Dict[str, Any]],
     penalties_rewards: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """
-    تصفية سجل الجزاءات والمكافآت حسب الدور والتبعية:
-    - الموظف: يرى الخاص به فقط.
-    - الـ Senior: يرى الخاص بالتابعين له فقط.
-    - المدير المباشر: يرى الخاص بمن هم تحت سلطته فقط.
-    - المدير العام / رئيس مجلس الإدارة / نائب الرئيس / HR: يرون الكل.
-    """
+    """تصفية سجل الجزاءات والمكافآت حسب الدور والتبعية."""
     user_role = (current_user.get("role") or "employee").strip().lower()
     if user_role in ("general_manager", "chairman", "vice_chairman", "hr"):
         return penalties_rewards
@@ -604,10 +630,11 @@ def render_approvals_inbox(
             emp_o = emp_by_id.get(str(adv.get("employee_id") or ""), {})
             st_val = (adv.get("status") or "").lower()
             with st.container(border=True):
+                mode_ar = "خصم كامل في نفس الشهر" if adv.get("repayment_mode") == "single_month" else f"تقسيط على {adv.get('installments_count')} شهر"
                 st.write(
                     f"**{emp_o.get('name_ar', '')}** — الإجمالي: `{adv.get('total_amount')} ج` | "
-                    f"النظام: `{adv.get('repayment_mode')}` ({adv.get('installments_count')} شهر، قسط `{adv.get('monthly_installment')} ج`) | "
-                    f"الحالة: `{st_val}`"
+                    f"النظام: `{mode_ar}` (قسط `{adv.get('monthly_installment')} ج`) | "
+                    f"بداية الخصم: `{adv.get('start_payroll_month')}` | الحالة: `{st_val}`"
                 )
                 if adv.get("reason"):
                     st.caption(f"السبب: {adv.get('reason')}")
@@ -1120,39 +1147,59 @@ def render_penalties_rewards_advances(
         else:
             st.info("لا توجد سجلات جزاءات أو مكافآت ضمن نطاق صلاحياتك حالياً.")
 
+    # --- التاب الثاني: طلبات السلف والتقسيط ---
     with tab_adv:
-        st.markdown("#### تقديم طلب سلفة (في نفس الشهر أو مقسطة بدون كسور)")
-        with st.form("add_advance_form", clear_on_submit=True):
-            c1, c2, c3 = st.columns(3)
+        st.markdown("#### تقديم طلب سلفة")
+
+        if rep_mode := st.selectbox(
+            "نظام السداد",
+            ["single_month", "installments_count"],
+            format_func=lambda x: {
+                "single_month": "خصم كامل في نفس الشهر",
+                "installments_count": "تقسيط على عدد الشهور",
+            }[x],
+            key="adv_repayment_mode_sel",
+        ):
+            pass
+
+        if rep_mode == "installments_count":
+            c1, c2, c3, c4 = st.columns(4)
             with c1:
-                tot_amt = st.number_input("إجمالي السلفة (جنيه)", min_value=50.0, value=1000.0, step=50.0)
+                tot_amt = st.number_input("إجمالي السلفة (جنيه)", min_value=50.0, value=1000.0, step=50.0, key="adv_tot_amt_inp")
             with c2:
-                rep_mode = st.selectbox(
-                    "نظام السداد",
-                    ["single_month", "installments_count", "fixed_installment"],
-                    format_func=lambda x: {
-                        "single_month": "خصم كامل في نفس الشهر",
-                        "installments_count": "تقسيط على عدد شهور",
-                        "fixed_installment": "قسط شهري ثابت وتصفية الباقي في النهاية",
-                    }[x],
-                )
+                start_ym = st.text_input("شهر بداية الخصم (YYYY-MM)", value=date.today().strftime("%Y-%m"), key="adv_start_ym_inp")
             with c3:
-                start_ym = st.text_input("شهر بداية الخصم (YYYY-MM)", value=date.today().strftime("%Y-%m"))
-
-            c4, c5 = st.columns(2)
+                inst_cnt = st.number_input("عدد الشهور", min_value=2, max_value=36, value=2, step=1, key="adv_inst_cnt_inp")
+            sched = calculate_advance_schedule(tot_amt, "installments_count", int(inst_cnt), 0.0)
             with c4:
-                inst_cnt = st.number_input("عدد الشهور (للتقسيط بعدد الشهور)", min_value=1, max_value=36, value=1, step=1)
-            with c5:
-                fixed_step = st.number_input("قيمة القسط الشهري الثابت (جنيه)", min_value=0.0, value=0.0, step=100.0)
+                st.text_input(
+                    "قيمة القسط الشهري",
+                    value=f"{sched['monthly_installment']:g} ج",
+                    disabled=True,
+                    key=f"adv_monthly_preview_{sched['monthly_installment']}",
+                )
+        else:
+            c1, c2 = st.columns(2)
+            with c1:
+                tot_amt = st.number_input("إجمالي السلفة (جنيه)", min_value=50.0, value=1000.0, step=50.0, key="adv_tot_amt_single")
+            with c2:
+                start_ym = st.text_input("شهر بداية الخصم (YYYY-MM)", value=date.today().strftime("%Y-%m"), key="adv_start_ym_single")
+            inst_cnt = 1
+            sched = calculate_advance_schedule(tot_amt, "single_month", 1, 0.0)
 
+        preview_rows = _build_advance_installments_preview(
+            total_amount=float(tot_amt),
+            start_ym=start_ym,
+            installments_count=int(sched["installments_count"]),
+            monthly_installment=float(sched["monthly_installment"]),
+            last_installment_amount=float(sched["last_installment_amount"]),
+        )
+        if rep_mode == "installments_count":
+            st.caption("جدول تقسيم الأقساط بالترتيب على الشهور:")
+            st.dataframe(preview_rows, use_container_width=True, hide_index=True)
+
+        with st.form("add_advance_form", clear_on_submit=True):
             adv_reason = st.text_input("سبب السلفة (اختياري)")
-
-            sched = calculate_advance_schedule(tot_amt, rep_mode, int(inst_cnt), float(fixed_step))
-            st.info(
-                f"معاينة السداد: {sched['installments_count']} قسط — "
-                f"القسط الشهري: **{sched['monthly_installment']} ج** — "
-                f"القسط الأخير: **{sched['last_installment_amount']} ج**"
-            )
 
             if st.form_submit_button("إرسال طلب السلفة", type="primary"):
                 insert_record("advances", {
@@ -1173,7 +1220,7 @@ def render_penalties_rewards_advances(
                     "advances",
                     "create_advance",
                     "إضافة",
-                    f"طلب سلفة بقيمة {tot_amt} ج للموظف {current_user.get('name_ar')}",
+                    f"طلب سلفة بقيمة {tot_amt} ج ({int(sched['installments_count'])} شهر) للموظف {current_user.get('name_ar')}",
                     by_name=current_user.get("name_ar", ""),
                     by_user_id=user_id,
                 )
@@ -1188,8 +1235,8 @@ def render_penalties_rewards_advances(
                         "الموظف": emp_by_id.get(str(adv.get("employee_id") or ""), {}).get("name_ar", ""),
                         "الإجمالي (ج)": adv.get("total_amount"),
                         "المتبقي (ج)": adv.get("remaining_amount"),
-                        "النظام": adv.get("repayment_mode"),
-                        "عدد الأقساط": adv.get("installments_count"),
+                        "نظام السداد": "خصم كامل في نفس الشهر" if adv.get("repayment_mode") == "single_month" else "تقسيط على عدد الشهور",
+                        "عدد الشهور": adv.get("installments_count"),
                         "القسط الشهري": adv.get("monthly_installment"),
                         "بداية الخصم": adv.get("start_payroll_month"),
                         "الحالة": adv.get("status"),
