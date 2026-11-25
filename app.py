@@ -3,7 +3,9 @@ import streamlit as st
 
 from db import fetch_table, insert_record, write_audit_log
 from ui_components import (
+    get_pending_approvals_count,
     render_admin_and_staff,
+    render_approvals_inbox,
     render_attendance_and_payroll,
     render_dashboard,
     render_kpis_and_reports,
@@ -145,34 +147,52 @@ def main() -> None:
                 saved_pin = str(emp_sel.get("pin_code") or "").strip()
                 if not saved_pin or pin_inp.strip() == saved_pin:
                     st.session_state["current_user"] = emp_sel
+                    st.session_state["active_page"] = "الداش بورد"
                     st.rerun()
                 else:
                     st.error("رمز الدخول غير صحيح.")
         return
 
     current_user = st.session_state["current_user"]
+    if "active_page" not in st.session_state:
+        st.session_state["active_page"] = "الداش بورد"
+
+    pending_cnt = get_pending_approvals_count(current_user, leave_requests)
+    approvals_btn_label = f"🔔 الموافقات ({pending_cnt})" if pending_cnt > 0 else "🔔 الموافقات"
 
     with st.sidebar:
         st.markdown(f"### 👤 {current_user.get('name_ar')}")
         st.caption(f"الدور: `{current_user.get('role')}` | رقم: `{current_user.get('employee_no')}`")
-        page = st.radio(
-            "القائمة الرئيسية",
-            [
-                "الداش بورد",
-                "الإجازات والأرصدة",
-                "الجزاءات والمكافآت والسلف",
-                "البصمة والـ Payroll",
-                "التقييم (KPIs) والتقارير",
-                "الموظفون والفروع والصلاحيات",
-            ],
-        )
+
+        main_menu = [
+            "الداش بورد",
+            "الإجازات والأرصدة",
+            "الجزاءات والمكافآت والسلف",
+            "البصمة والـ Payroll",
+            "التقييم (KPIs) والتقارير",
+            "الموظفون والفروع والصلاحيات",
+        ]
+        current_radio_val = st.session_state["active_page"] if st.session_state["active_page"] in main_menu else "الداش بورد"
+        picked_menu = st.radio("القائمة الرئيسية", main_menu, index=main_menu.index(current_radio_val))
+        if picked_menu != current_radio_val:
+            st.session_state["active_page"] = picked_menu
+            st.rerun()
+
+        # عنصر الموافقات المستقل بالعدّاد أسفل القائمة مباشرة
+        if st.button(approvals_btn_label, key="nav_approvals_btn", use_container_width=True):
+            st.session_state["active_page"] = "الموافقات"
+            st.rerun()
+
         st.divider()
         if st.button("🔄 تحديث البيانات", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
         if st.button("تسجيل الخروج", use_container_width=True):
             del st.session_state["current_user"]
+            st.session_state.pop("active_page", None)
             st.rerun()
+
+    page = st.session_state["active_page"]
 
     st.markdown(
         f"""
@@ -188,6 +208,8 @@ def main() -> None:
         render_dashboard(employees, departments, shifts, leave_requests, attendance_logs, advances)
     elif page == "الإجازات والأرصدة":
         render_leaves_module(current_user, employees, departments, leave_types, leave_balances, leave_requests, org_settings)
+    elif page == "الموافقات":
+        render_approvals_inbox(current_user, leave_balances, leave_requests)
     elif page == "الجزاءات والمكافآت والسلف":
         render_penalties_rewards_advances(current_user, employees, penalties_rewards, advances)
     elif page == "البصمة والـ Payroll":
