@@ -556,7 +556,6 @@ def get_pending_items_bundle(
             elif user_role == "manager" and st_val == "pending" and is_my_subordinate:
                 pending_adv.append(adv)
 
-    # 4. موافقات الوقت الإضافي: سينيور (إن وُجد) -> مدير مباشر -> مدير عام
     pending_ot: List[Dict[str, Any]] = []
     for att in attendance_logs:
         if int(att.get("overtime_minutes") or 0) <= 0:
@@ -1766,7 +1765,7 @@ def render_penalties_rewards_advances(
 
 
 # =====================================================================
-# 5. البصمة والـ Payroll (سجل الوقت الإضافي للـ HR والمدير العام فقط + فلاتر)
+# 5. البصمة والـ Payroll (شيت المرتب للجميع + شيت المرتبات للمدير المباشر و HR والمدير العام)
 # =====================================================================
 def render_attendance_and_payroll(
     current_user: Dict[str, Any],
@@ -1784,7 +1783,7 @@ def render_attendance_and_payroll(
     perms = get_effective_permissions(current_user)
     user_id = str(current_user.get("id"))
     my_ids = _emp_identifiers(current_user)
-    user_role = (current_user.get("role") or "employee").lower()
+    user_role = (current_user.get("role") or "employee").strip().lower()
     all_leaves = leave_requests or []
 
     emp_by_no = {str(e.get("employee_no") or "").strip(): e for e in employees if e.get("employee_no")}
@@ -1794,6 +1793,7 @@ def render_attendance_and_payroll(
 
     can_upload_att = user_role in ("general_manager", "hr") or perms.get("manage_payroll")
     can_view_ot_log = user_role in ("general_manager", "hr") or perms.get("manage_payroll")
+    can_view_all_payroll_sheet = user_role in ("general_manager", "hr", "manager") or perms.get("manage_payroll")
 
     att_by_emp_date: Dict[tuple, Dict[str, Any]] = {}
     for rec in attendance_logs:
@@ -1807,11 +1807,14 @@ def render_attendance_and_payroll(
         tab_titles.append("📥 رفع البصمة")
     if can_view_ot_log:
         tab_titles.append("🕒 سجل الوقت الإضافي")
-    tab_titles.append("💵 شيت المرتب الفعلي والأرشيف")
+    tab_titles.append("💵 شيت المرتب")
+    if can_view_all_payroll_sheet:
+        tab_titles.append("📊 شيت المرتبات")
 
     tabs = st.tabs(tab_titles)
     t_idx = 0
 
+    # --- 1) شيت البصمة ---
     with tabs[t_idx]:
         st.markdown("#### شيت البصمة (الفترة من يوم 21 الشهر السابق إلى يوم 20 الشهر المختار)")
         sheet_ym = st.text_input("اختر الشهر (YYYY-MM)", value=date.today().strftime("%Y-%m"), key="att_sheet_ym")
@@ -1856,6 +1859,7 @@ def render_attendance_and_payroll(
         st.dataframe(sheet_rows, use_container_width=True, hide_index=True)
     t_idx += 1
 
+    # --- 2) رفع البصمة (للمدير العام و HR فقط) ---
     if can_upload_att:
         with tabs[t_idx]:
             st.markdown("#### رفع وإدخال البصمة (للمدير العام و HR فقط)")
@@ -2075,6 +2079,7 @@ def render_attendance_and_payroll(
                         st.rerun()
         t_idx += 1
 
+    # --- 3) سجل الوقت الإضافي (للمدير العام و HR فقط) ---
     if can_view_ot_log:
         with tabs[t_idx]:
             st.markdown("#### سجل الوقت الإضافي (للمدير العام و HR فقط)")
@@ -2116,114 +2121,313 @@ def render_attendance_and_payroll(
                 st.info("لا توجد سجلات وقت إضافي مطابقة للفلاتر المختارة.")
         t_idx += 1
 
+    # --- 4) شيت المرتب (لجميع الموظفين — بطاقة مرتب شخصية مبسطة وأنيقة) ---
     with tabs[t_idx]:
-        st.markdown("#### شيت المرتب الشهري الفعلي والأرشيف (لكل الموظفين بلا استثناء)")
-        pay_ym = st.text_input("شهر المرتب (YYYY-MM)", value=date.today().strftime("%Y-%m"), key="pay_sheet_ym")
+        st.markdown("#### 💵 شيت المرتب الشهري الخاص بي")
+        my_pay_ym = st.text_input("شهر المرتب (YYYY-MM)", value=date.today().strftime("%Y-%m"), key="my_pay_sheet_ym")
 
-        computed_list = []
-        for emp in employees:
-            if (emp.get("status") or "active") != "active":
-                continue
-            res = compute_employee_monthly_payroll(
-                employee=emp,
-                payroll_month=pay_ym,
-                shift=None,
-                attendance_logs=attendance_logs,
-                penalties_rewards=penalties_rewards,
-                advances=advances,
-                official_holidays=official_holidays,
-                grace_late_minutes=grace_late,
-                grace_early_minutes=grace_early,
-            )
-            computed_list.append(res)
+        my_res = compute_employee_monthly_payroll(
+            employee=current_user,
+            payroll_month=my_pay_ym,
+            shift=None,
+            attendance_logs=attendance_logs,
+            penalties_rewards=penalties_rewards,
+            advances=advances,
+            official_holidays=official_holidays,
+            grace_late_minutes=grace_late,
+            grace_early_minutes=grace_early,
+        )
 
-        if computed_list:
-            sheet_rows = [
-                {
-                    "الرقم الوظيفي": r["employee_no"],
-                    "الاسم": r["name_ar"],
-                    "المسمى": r["job_title"],
-                    "المرتب الأساسي": r["base_salary"],
-                    "إجازات رسمية (+يوم)": r["holiday_bonus"],
-                    "المكافآت": r["rewards_total"],
-                    "إضافي معتمد (د)": r["approved_overtime_minutes"],
-                    "وقت إضافي معتمد (ج)": r["overtime_pay"],
-                    "خصم السلف": r["advances_deduction"],
-                    "خصم الجزاءات": r["penalties_deduction"],
-                    "خصم التأخير/الانصراف": r["late_deduction"],
-                    "المرتب الفعلي": r["net_salary"],
-                }
-                for r in computed_list
-            ]
-            st.dataframe(sheet_rows, use_container_width=True, hide_index=True)
+        emp_name_txt = my_res.get("name_ar") or current_user.get("name_ar") or "—"
+        emp_job_txt = my_res.get("job_title") or current_user.get("job_title") or "موظف"
+        emp_no_txt = my_res.get("employee_no") or current_user.get("employee_no") or "—"
 
-            excel_buf = io.BytesIO()
-            with pd.ExcelWriter(excel_buf, engine="openpyxl") as writer:
-                pd.DataFrame(sheet_rows).to_excel(writer, index=False, sheet_name="Payroll")
-            st.download_button(
-                "📥 تحميل شيت المرتبات Excel",
-                data=excel_buf.getvalue(),
-                file_name=f"payroll_{pay_ym}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
+        st.markdown(
+            f"""
+            <style>
+                .pay-card-box {{
+                    background: #ffffff;
+                    border: 1.5px solid #cbd5e1;
+                    border-radius: 14px;
+                    padding: 20px;
+                    margin-top: 10px;
+                    box-shadow: 0 4px 14px rgba(15, 76, 92, 0.08);
+                    direction: rtl;
+                    font-family: 'Cairo', sans-serif;
+                }}
+                .pay-header-strip {{
+                    background: linear-gradient(135deg, #0f4c5c 0%, #1c7285 100%);
+                    color: #ffffff;
+                    border-radius: 10px;
+                    padding: 12px 18px;
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    flex-wrap: wrap;
+                    gap: 10px;
+                    margin-bottom: 14px;
+                }}
+                .pay-header-item {{
+                    font-size: 14.5px;
+                    font-weight: 700;
+                }}
+                .pay-base-row {{
+                    background: #eff6ff;
+                    border: 1.5px solid #93c5fd;
+                    border-radius: 10px;
+                    padding: 12px 16px;
+                    margin-bottom: 14px;
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    font-size: 15.5px;
+                    font-weight: 700;
+                    color: #1e3a8a;
+                }}
+                .pay-items-table {{
+                    width: 100%;
+                    border-collapse: collapse;
+                    margin-bottom: 16px;
+                }}
+                .pay-items-table th {{
+                    background: #f1f5f9;
+                    color: #0f172a;
+                    font-weight: 700;
+                    font-size: 14px;
+                    padding: 10px;
+                    border: 1px solid #cbd5e1;
+                    text-align: center;
+                }}
+                .pay-items-table td {{
+                    padding: 10px;
+                    border: 1px solid #e2e8f0;
+                    font-size: 14.5px;
+                    font-weight: 600;
+                    text-align: center;
+                    color: #1e293b;
+                }}
+                .pay-plus {{
+                    color: #15803d;
+                    font-weight: 700;
+                }}
+                .pay-minus {{
+                    color: #b91c1c;
+                    font-weight: 700;
+                }}
+                .pay-net-box {{
+                    background: linear-gradient(135deg, #14532d 0%, #166534 100%);
+                    color: #ffffff;
+                    border-radius: 11px;
+                    padding: 14px 20px;
+                    text-align: center;
+                    font-size: 18px;
+                    font-weight: 700;
+                    letter-spacing: 0.2px;
+                }}
+            </style>
+            <div class="pay-card-box">
+                <div class="pay-header-strip">
+                    <div class="pay-header-item">👤 الاسم: {emp_name_txt}</div>
+                    <div class="pay-header-item">💼 الوظيفة: {emp_job_txt}</div>
+                    <div class="pay-header-item">🔢 الرقم الوظيفي: {emp_no_txt}</div>
+                </div>
+                <div class="pay-base-row">
+                    <span>💰 المرتب الأساسي</span>
+                    <span>{my_res['base_salary']:,.2f} جنيه</span>
+                </div>
+                <table class="pay-items-table">
+                    <thead>
+                        <tr>
+                            <th>البند</th>
+                            <th>القيمة (جنيه)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>إجازات رسمية (+يوم)</td>
+                            <td class="pay-plus">+ {my_res['holiday_bonus']:,.2f} ج</td>
+                        </tr>
+                        <tr>
+                            <td>المكافآت</td>
+                            <td class="pay-plus">+ {my_res['rewards_total']:,.2f} ج</td>
+                        </tr>
+                        <tr>
+                            <td>وقت إضافي معتمد ({my_res['approved_overtime_minutes']} دقيقة)</td>
+                            <td class="pay-plus">+ {my_res['overtime_pay']:,.2f} ج</td>
+                        </tr>
+                        <tr>
+                            <td>خصم السلف</td>
+                            <td class="pay-minus">- {my_res['advances_deduction']:,.2f} ج</td>
+                        </tr>
+                        <tr>
+                            <td>خصم الجزاءات</td>
+                            <td class="pay-minus">- {my_res['penalties_deduction']:,.2f} ج</td>
+                        </tr>
+                        <tr>
+                            <td>خصم التأخير / الانصراف</td>
+                            <td class="pay-minus">- {my_res['late_deduction']:,.2f} ج</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <div class="pay-net-box">
+                    ✅ المرتب الفعلي: {my_res['net_salary']:,.2f} جنيه
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    t_idx += 1
 
-            if (perms.get("manage_payroll") or user_role in ("hr", "general_manager")) and st.button(
-                "🔒 حفظ وأرشفة مسير الشهر في الأرشيف", type="primary"
-            ):
-                for r in computed_list:
-                    upsert_record(
-                        "payroll_runs",
-                        {
-                            "payroll_month": pay_ym[:7],
-                            "employee_id": r["employee_id"],
-                            "base_salary": r["base_salary"],
-                            "holiday_bonus": r["holiday_bonus"],
-                            "rewards_total": r["rewards_total"],
-                            "overtime_pay": r["overtime_pay"],
-                            "advances_deduction": r["advances_deduction"],
-                            "penalties_deduction": r["penalties_deduction"],
-                            "late_deduction": r["late_deduction"],
-                            "net_salary": r["net_salary"],
-                            "is_closed": True,
-                            "closed_by": user_id,
-                            "closed_at": datetime.utcnow().isoformat() + "Z",
-                        },
-                        on_conflict="payroll_month,employee_id",
-                    )
-                write_audit_log(
-                    "payroll_runs",
-                    "close_monthly_payroll",
-                    "أرشفة",
-                    f"حفظ وأرشفة مسير مرتبات شهر {pay_ym}",
-                    by_name=current_user.get("name_ar", ""),
-                    by_user_id=user_id,
+    # --- 5) شيت المرتبات (للمدير المباشر و HR والمدير العام فقط + إجمالي عام في الأسفل) ---
+    if can_view_all_payroll_sheet and t_idx < len(tabs):
+        with tabs[t_idx]:
+            st.markdown("#### 📊 شيت المرتبات الشهري والأرشيف")
+            pay_ym = st.text_input("شهر المرتب (YYYY-MM)", value=date.today().strftime("%Y-%m"), key="pay_sheet_ym")
+
+            if user_role in ("general_manager", "hr") or perms.get("manage_payroll"):
+                target_payroll_emps = [e for e in employees if (e.get("status") or "active") == "active"]
+            else:
+                # المدير المباشر: يرى الموظفين التابعين له تحت سلطته
+                target_payroll_emps = _get_subordinate_employees(current_user, employees)
+
+            computed_list = []
+            for emp in target_payroll_emps:
+                res = compute_employee_monthly_payroll(
+                    employee=emp,
+                    payroll_month=pay_ym,
+                    shift=None,
+                    attendance_logs=attendance_logs,
+                    penalties_rewards=penalties_rewards,
+                    advances=advances,
+                    official_holidays=official_holidays,
+                    grace_late_minutes=grace_late,
+                    grace_early_minutes=grace_early,
                 )
-                st.success(f"✅ تم حفظ وأرشفة مرتبات شهر {pay_ym} بنجاح.")
-                st.rerun()
+                computed_list.append(res)
 
-        st.markdown("#### أرشيف الشهور السابقة المحفوظة")
-        if payroll_runs:
-            months_avail = sorted({str(p.get("payroll_month")) for p in payroll_runs if p.get("payroll_month")}, reverse=True)
-            sel_arch_ym = st.selectbox("اختر شهراً من الأرشيف", months_avail, key="arch_ym_sel")
-            arch_filtered = [p for p in payroll_runs if str(p.get("payroll_month")) == sel_arch_ym]
-            st.dataframe(
-                [
+            if computed_list:
+                sheet_rows = [
                     {
-                        "الموظف": emp_by_id.get(str(p.get("employee_id") or ""), {}).get("name_ar", p.get("employee_id")),
-                        "الأساسي": p.get("base_salary"),
-                        "إجازات رسمية": p.get("holiday_bonus"),
-                        "مكافآت": p.get("rewards_total"),
-                        "إضافي": p.get("overtime_pay"),
-                        "سلف": p.get("advances_deduction"),
-                        "جزاءات": p.get("penalties_deduction"),
-                        "تأخيرات": p.get("late_deduction"),
-                        "المرتب الفعلي": p.get("net_salary"),
+                        "الرقم الوظيفي": r["employee_no"],
+                        "الاسم": r["name_ar"],
+                        "المسمى": r["job_title"],
+                        "المرتب الأساسي": r["base_salary"],
+                        "إجازات رسمية (+يوم)": r["holiday_bonus"],
+                        "المكافآت": r["rewards_total"],
+                        "إضافي معتمد (د)": r["approved_overtime_minutes"],
+                        "وقت إضافي معتمد (ج)": r["overtime_pay"],
+                        "خصم السلف": r["advances_deduction"],
+                        "خصم الجزاءات": r["penalties_deduction"],
+                        "خصم التأخير/الانصراف": r["late_deduction"],
+                        "المرتب الفعلي": r["net_salary"],
                     }
-                    for p in arch_filtered
-                ],
-                use_container_width=True,
-                hide_index=True,
-            )
+                    for r in computed_list
+                ]
+
+                tot_base = round_half_up_2(sum(float(r["base_salary"] or 0) for r in computed_list))
+                tot_hol = round_half_up_2(sum(float(r["holiday_bonus"] or 0) for r in computed_list))
+                tot_rew = round_half_up_2(sum(float(r["rewards_total"] or 0) for r in computed_list))
+                tot_ot_mins = sum(int(r["approved_overtime_minutes"] or 0) for r in computed_list)
+                tot_ot = round_half_up_2(sum(float(r["overtime_pay"] or 0) for r in computed_list))
+                tot_adv = round_half_up_2(sum(float(r["advances_deduction"] or 0) for r in computed_list))
+                tot_pen = round_half_up_2(sum(float(r["penalties_deduction"] or 0) for r in computed_list))
+                tot_late = round_half_up_2(sum(float(r["late_deduction"] or 0) for r in computed_list))
+                tot_all_ded = round_half_up_2(tot_adv + tot_pen + tot_late)
+                tot_net = round_half_up_2(sum(float(r["net_salary"] or 0) for r in computed_list))
+
+                total_row_dict = {
+                    "الرقم الوظيفي": "—",
+                    "الاسم": "الإجمالي العام",
+                    "المسمى": f"عدد: {len(computed_list)}",
+                    "المرتب الأساسي": tot_base,
+                    "إجازات رسمية (+يوم)": tot_hol,
+                    "المكافآت": tot_rew,
+                    "إضافي معتمد (د)": tot_ot_mins,
+                    "وقت إضافي معتمد (ج)": tot_ot,
+                    "خصم السلف": tot_adv,
+                    "خصم الجزاءات": tot_pen,
+                    "خصم التأخير/الانصراف": tot_late,
+                    "المرتب الفعلي": tot_net,
+                }
+
+                st.dataframe(sheet_rows + [total_row_dict], use_container_width=True, hide_index=True)
+
+                st.markdown("#### 📌 ملخص الإجماليات النهائية للشيت")
+                g1, g2, g3, g4, g5, g6 = st.columns(6)
+                g1.metric("إجمالي المرتبات الأساسية", f"{tot_base:,.2f} ج")
+                g2.metric("إجمالي المكافآت", f"{tot_rew:,.2f} ج")
+                g3.metric("إجمالي الإضافي", f"{tot_ot:,.2f} ج")
+                g4.metric("إجمالي الخصومات", f"{tot_all_ded:,.2f} ج")
+                g5.metric("إجمالي الجزاءات", f"{tot_pen:,.2f} ج")
+                g6.metric("إجمالي المرتبات الفعلية", f"{tot_net:,.2f} ج")
+
+                excel_buf = io.BytesIO()
+                with pd.ExcelWriter(excel_buf, engine="openpyxl") as writer:
+                    pd.DataFrame(sheet_rows + [total_row_dict]).to_excel(writer, index=False, sheet_name="Payroll")
+                st.download_button(
+                    "📥 تحميل شيت المرتبات Excel",
+                    data=excel_buf.getvalue(),
+                    file_name=f"payroll_{pay_ym}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+
+                if (perms.get("manage_payroll") or user_role in ("hr", "general_manager")) and st.button(
+                    "🔒 حفظ وأرشفة مسير الشهر في الأرشيف", type="primary"
+                ):
+                    for r in computed_list:
+                        upsert_record(
+                            "payroll_runs",
+                            {
+                                "payroll_month": pay_ym[:7],
+                                "employee_id": r["employee_id"],
+                                "base_salary": r["base_salary"],
+                                "holiday_bonus": r["holiday_bonus"],
+                                "rewards_total": r["rewards_total"],
+                                "overtime_pay": r["overtime_pay"],
+                                "advances_deduction": r["advances_deduction"],
+                                "penalties_deduction": r["penalties_deduction"],
+                                "late_deduction": r["late_deduction"],
+                                "net_salary": r["net_salary"],
+                                "is_closed": True,
+                                "closed_by": user_id,
+                                "closed_at": datetime.utcnow().isoformat() + "Z",
+                            },
+                            on_conflict="payroll_month,employee_id",
+                        )
+                    write_audit_log(
+                        "payroll_runs",
+                        "close_monthly_payroll",
+                        "أرشفة",
+                        f"حفظ وأرشفة مسير مرتبات شهر {pay_ym}",
+                        by_name=current_user.get("name_ar", ""),
+                        by_user_id=user_id,
+                    )
+                    st.success(f"✅ تم حفظ وأرشفة مرتبات شهر {pay_ym} بنجاح.")
+                    st.rerun()
+
+            st.markdown("#### أرشيف الشهور السابقة المحفوظة")
+            if payroll_runs:
+                months_avail = sorted({str(p.get("payroll_month")) for p in payroll_runs if p.get("payroll_month")}, reverse=True)
+                sel_arch_ym = st.selectbox("اختر شهراً من الأرشيف", months_avail, key="arch_ym_sel")
+                arch_filtered = [p for p in payroll_runs if str(p.get("payroll_month")) == sel_arch_ym]
+                st.dataframe(
+                    [
+                        {
+                            "الموظف": emp_by_id.get(str(p.get("employee_id") or ""), {}).get("name_ar", p.get("employee_id")),
+                            "الأساسي": p.get("base_salary"),
+                            "إجازات رسمية": p.get("holiday_bonus"),
+                            "مكافآت": p.get("rewards_total"),
+                            "إضافي": p.get("overtime_pay"),
+                            "سلف": p.get("advances_deduction"),
+                            "جزاءات": p.get("penalties_deduction"),
+                            "تأخيرات": p.get("late_deduction"),
+                            "المرتب الفعلي": p.get("net_salary"),
+                        }
+                        for p in arch_filtered
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
 
 # =====================================================================
