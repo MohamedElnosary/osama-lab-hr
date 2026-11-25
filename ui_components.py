@@ -47,6 +47,17 @@ def _emp_identifiers(emp: Dict[str, Any]) -> set:
     return ids
 
 
+def _compute_leave_days_from_dates(start_dt: Any, end_dt: Any) -> float:
+    """حساب عدد أيام الإجازة تلقائياً من تاريخ البداية وتاريخ النهاية."""
+    s = parse_date_safe(start_dt)
+    e = parse_date_safe(end_dt)
+    if not s or not e:
+        return 0.0
+    if e < s:
+        return 0.0
+    return float((e - s).days + 1)
+
+
 # =====================================================================
 # تجميع كافة الموافقات المعلقة في مكان واحد (إجازات + جزاءات/مكافآت + سلف + إضافي)
 # =====================================================================
@@ -360,10 +371,11 @@ def render_approvals_inbox(
         for lr in bundle["leaves"]:
             st_val = (lr.get("status") or "").lower()
             with st.container(border=True):
+                backup_txt = f" | البديل: **{lr.get('backup_employee_name')}**" if lr.get("backup_employee_name") else ""
                 st.write(
                     f"**{lr.get('employee_name')}** — {lr.get('type_name')} | "
                     f"من `{str(lr.get('start_date'))[:10]}` إلى `{str(lr.get('end_date'))[:10]}` "
-                    f"(**{lr.get('days')} يوم**) | الحالة: `{st_val}`"
+                    f"(**{lr.get('days')} يوم**){backup_txt} | الحالة: `{st_val}`"
                 )
                 if lr.get("reason"):
                     st.caption(f"السبب: {lr.get('reason')}")
@@ -580,21 +592,22 @@ def render_leaves_module(
             bal_by_emp[str(b["team_user_id"])] = b
 
     my_bal = bal_by_emp.get(user_id) or bal_by_emp.get(user_team_id) or {}
-    annual_rem = float(my_bal.get("annual") or 0) - float(my_bal.get("used_annual") or 0)
-    casual_rem = float(my_bal.get("casual") or 0) - float(my_bal.get("used_casual") or 0)
+    ann_total = float(my_bal.get("annual") or 0)
+    ann_used = float(my_bal.get("used_annual") or 0)
+    annual_rem = ann_total - ann_used
 
-    b1, b2, b3 = st.columns(3)
-    b1.metric("رصيدي الاعتيادي/السنوي المتبقي", round_half_up_2(annual_rem))
-    b2.metric("رصيدي العارضة المتبقي", round_half_up_2(casual_rem))
-    b3.metric("تاريخ التعيين", str(current_user.get("hire_date") or "غير محدد")[:10])
+    cas_total = float(my_bal.get("casual") or 0)
+    cas_used = float(my_bal.get("used_casual") or 0)
+    casual_rem = cas_total - cas_used
 
-    can_view_all_balances = user_role in ("general_manager", "chairman", "vice_chairman", "hr")
-    tab_titles = ["➕ تقديم طلب إجازة", "📋 سجل الإجازات"]
-    if can_view_all_balances:
+    can_manage_all_balances = user_role in ("general_manager", "chairman", "vice_chairman", "hr")
+    tab_titles = ["➕ تقديم طلب إجازة", "📋 سجل الإجازات", "⚖️ الرصيد"]
+    if can_manage_all_balances:
         tab_titles.append("⚖️ أرصدة جميع الموظفين والتجديد")
 
     tabs = st.tabs(tab_titles)
 
+    # --- التاب الأول: تقديم طلب إجازة ---
     with tabs[0]:
         active_types = [lt for lt in leave_types if lt.get("active", True)]
         if not active_types:
@@ -611,21 +624,31 @@ def render_leaves_module(
                 f"تفعيل الرصيد بعد: {chosen_type.get('min_tenure_days', 30)} يوم من التعيين"
             )
 
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                start_dt = st.date_input("تاريخ البداية", value=date.today(), key="leave_start_dt")
-            with c2:
-                end_dt = st.date_input("تاريخ النهاية", value=start_dt, min_value=start_dt, key="leave_end_dt")
-            with c3:
-                if end_dt < start_dt:
-                    days_val = 0.0
-                    days_display = "0"
-                else:
-                    days_val = float((end_dt - start_dt).days + 1)
-                    days_display = f"{int(days_val)}"
-                st.text_input("عدد أيام الإجازة", value=days_display, disabled=True, key="leave_days_box")
+            # تواريخ البداية والنهاية وبوكس عدد أيام الإجازة المحسوب تلقائياً
+            d_col1, d_col2, d_col3 = st.columns(3)
+            with d_col1:
+                start_dt = st.date_input("تاريخ البداية", value=date.today(), key="lr_start_date_input")
+            with d_col2:
+                end_dt = st.date_input("تاريخ النهاية", value=start_dt, key="lr_end_date_input")
+
+            days_val = _compute_leave_days_from_dates(start_dt, end_dt)
+            days_box_str = str(int(days_val)) if days_val.is_integer() else str(days_val)
+
+            with d_col3:
+                st.text_input("عدد أيام الإجازة", value=days_box_str, disabled=True, key="lr_days_readonly_box")
+
+            # قائمة البديل (أوبشنال)
+            backup_choices: Dict[str, Any] = {"بدون بديل (اختياري)": None}
+            for e in employees:
+                if str(e.get("id")) == user_id:
+                    continue
+                if (e.get("status") or "active") != "active":
+                    continue
+                b_lbl = f"{e.get('name_ar')} (#{e.get('employee_no')})"
+                backup_choices[b_lbl] = e
 
             with st.form("submit_leave_form", clear_on_submit=False):
+                backup_lbl = st.selectbox("البديل", list(backup_choices.keys()), key="lr_backup_emp_box")
                 reason_val = st.text_area("السبب / ملاحظات", placeholder="اكتب السبب (مطلوب للإجازة المرضية أو التوضيح)")
                 uploaded_file = st.file_uploader(
                     "إرفاق تقرير / مستند (مطلوب للتقرير المرضي)",
@@ -634,12 +657,13 @@ def render_leaves_module(
 
                 submitted = st.form_submit_button("إرسال طلب الإجازة", type="primary")
                 if submitted:
+                    final_days = _compute_leave_days_from_dates(start_dt, end_dt)
                     ok, msg = validate_leave_request(
                         employee=current_user,
                         leave_type=chosen_type,
                         start_date=start_dt,
                         end_date=end_dt,
-                        days_requested=float(days_val),
+                        days_requested=float(final_days),
                         existing_requests=leave_requests,
                         leave_balance=my_bal,
                         has_attachment=uploaded_file is not None,
@@ -659,6 +683,7 @@ def render_leaves_module(
                                 or ""
                             )
 
+                        chosen_backup = backup_choices.get(backup_lbl)
                         route = determine_initial_approval_route(current_user, employees)
                         payload = {
                             "employee_id": current_user.get("id"),
@@ -666,11 +691,13 @@ def render_leaves_module(
                             "employee_name": current_user.get("name_ar"),
                             "department_id": current_user.get("department_id"),
                             "shift_id": current_user.get("shift_id"),
+                            "backup_employee_id": chosen_backup.get("id") if chosen_backup else None,
+                            "backup_employee_name": chosen_backup.get("name_ar") if chosen_backup else "",
                             "type_code": chosen_type.get("code"),
                             "type_name": chosen_type.get("name_ar"),
                             "start_date": start_dt.isoformat(),
                             "end_date": end_dt.isoformat(),
-                            "days": float(days_val),
+                            "days": float(final_days),
                             "reason": reason_val.strip(),
                             "attachment_url": att_url,
                             "deducts": bool(chosen_type.get("deducts")),
@@ -686,13 +713,14 @@ def render_leaves_module(
                             "leave_requests",
                             "create_leave_request",
                             "إضافة",
-                            f"تقديم طلب {chosen_type.get('name_ar')} ({int(days_val)} يوم) للموظف {current_user.get('name_ar')}",
+                            f"تقديم طلب {chosen_type.get('name_ar')} ({final_days:g} يوم) للموظف {current_user.get('name_ar')}",
                             by_name=current_user.get("name_ar", ""),
                             by_user_id=user_id,
                         )
                         st.success("✅ تم إرسال طلب الإجازة بنجاح وإدراجه في مسار الموافقات.")
                         st.rerun()
 
+    # --- التاب الثاني: سجل الإجازات مع 4 فلاتر ---
     with tabs[1]:
         visible_requests = _filter_visible_leave_requests(current_user, employees, leave_requests)
         if visible_requests:
@@ -705,6 +733,7 @@ def render_leaves_module(
                 enriched_rows.append({
                     "الموظف": emp_label,
                     "الفرع": branch_label,
+                    "البديل": lr.get("backup_employee_name") or "—",
                     "نوع الإجازة": type_label,
                     "من": str(lr.get("start_date") or "")[:10],
                     "إلى": str(lr.get("end_date") or "")[:10],
@@ -740,8 +769,23 @@ def render_leaves_module(
         else:
             st.info("لا توجد طلبات إجازات ضمن نطاق صلاحياتك حالياً.")
 
-    if can_view_all_balances and len(tabs) > 2:
-        with tabs[2]:
+    # --- التاب الثالث: شاشة «الرصيد» للموظف / Senior / المدير المباشر (رصيده فقط) ---
+    with tabs[2]:
+        st.markdown("#### رصيد إجازاتي الحالي")
+        st.caption(f"تاريخ التعيين: `{str(current_user.get('hire_date') or 'غير محدد')[:10]}`")
+        r1, r2, r3 = st.columns(3)
+        r1.metric("الاعتيادي / السنوي المستحق", round_half_up_2(ann_total))
+        r2.metric("المستخدم من الاعتيادي / السنوي", round_half_up_2(ann_used))
+        r3.metric("المتبقي من الاعتيادي / السنوي", round_half_up_2(annual_rem))
+
+        c_r1, c_r2, c_r3 = st.columns(3)
+        c_r1.metric("العارضة المستحق", round_half_up_2(cas_total))
+        c_r2.metric("المستخدم من العارضة", round_half_up_2(cas_used))
+        c_r3.metric("المتبقي من العارضة", round_half_up_2(casual_rem))
+
+    # --- التاب الرابع: أرصدة جميع الموظفين والتجديد (للمدير العام / رئيس مجلس الإدارة / HR فقط) ---
+    if can_manage_all_balances and len(tabs) > 3:
+        with tabs[3]:
             st.markdown("#### أرصدة جميع الموظفين، الاحتساب النسبي، وتجديد بداية السنة")
             admin_yr = str(org_settings.get("admin_year") or date.today().year)
             def_ann = float(org_settings.get("default_annual") or 15)
@@ -751,7 +795,7 @@ def render_leaves_module(
             with c_r1:
                 is_reset_mode = st.checkbox("تفعيل وضع (تصفير/تجديد بداية السنة للجميع بالتساوي)", value=False)
             with c_r2:
-                if perms.get("manage_settings") or perms.get("manage_payroll"):
+                if perms.get("manage_settings") or perms.get("manage_payroll") or user_role in ("general_manager", "chairman", "vice_chairman", "hr"):
                     if st.button("⚡ تحديث/توليد أرصدة جميع الموظفين", type="primary"):
                         for emp in employees:
                             if (emp.get("status") or "active") != "active":
