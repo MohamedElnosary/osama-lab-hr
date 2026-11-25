@@ -1,5 +1,5 @@
 from datetime import date, datetime, time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 import io
 import pandas as pd
 import streamlit as st
@@ -322,7 +322,7 @@ def get_pending_items_bundle(
     penalties_rewards: List[Dict[str, Any]],
     advances: List[Dict[str, Any]],
     attendance_logs: List[Dict[str, Any]],
-    employees: List[Dict[str, Any]] = None,
+    employees: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
     perms = get_effective_permissions(current_user)
     if perms.get("is_monitor_only"):
@@ -411,7 +411,7 @@ def get_pending_approvals_count(
     penalties_rewards: List[Dict[str, Any]],
     advances: List[Dict[str, Any]],
     attendance_logs: List[Dict[str, Any]],
-    employees: List[Dict[str, Any]] = None,
+    employees: Optional[List[Dict[str, Any]]] = None,
 ) -> int:
     """إجمالي عدد الإشعارات المعلقة على زر الموافقات الرئيسي."""
     bundle = get_pending_items_bundle(
@@ -1533,7 +1533,7 @@ def render_penalties_rewards_advances(
 
 
 # =====================================================================
-# 5. البصمة والإجازات الرسمية والـ Payroll
+# 5. البصمة والـ Payroll
 # =====================================================================
 def render_attendance_and_payroll(
     current_user: Dict[str, Any],
@@ -1546,7 +1546,7 @@ def render_attendance_and_payroll(
     payroll_runs: List[Dict[str, Any]],
     org_settings: Dict[str, Any],
 ) -> None:
-    st.markdown("### ⏱️ البصمة والإجازات الرسمية والـ Payroll")
+    st.markdown("### ⏱️ البصمة والـ Payroll")
     perms = get_effective_permissions(current_user)
     user_id = str(current_user.get("id"))
     user_role = (current_user.get("role") or "employee").lower()
@@ -1556,10 +1556,9 @@ def render_attendance_and_payroll(
     grace_late = int(org_settings.get("grace_late_minutes") or 15)
     grace_early = int(org_settings.get("grace_early_minutes") or 5)
 
-    tab_att, tab_ot_view, tab_hol, tab_pay = st.tabs([
+    tab_att, tab_ot_view, tab_pay = st.tabs([
         "📥 رفع البصمة (Excel / CSV)",
         "🕒 سجل الوقت الإضافي",
-        "🎉 الإجازات الرسمية والمرتبات",
         "💵 شيت المرتب الفعلي والأرشيف",
     ])
 
@@ -1651,46 +1650,6 @@ def render_attendance_and_payroll(
             )
         else:
             st.info("لا توجد سجلات وقت إضافي حتى الآن.")
-
-    with tab_hol:
-        st.markdown("#### الإجازات الرسمية السنوية وتأثيرها على المرتبات (إضافة يوم لكل إجازة مفعّلة)")
-        if perms.get("manage_settings") or perms.get("manage_payroll"):
-            with st.form("add_holiday_form", clear_on_submit=True):
-                c1, c2, c3 = st.columns(3)
-                with c1:
-                    h_name = st.text_input("اسم الإجازة الرسمية", placeholder="مثال: عيد الفطر المبارك")
-                with c2:
-                    h_date = st.date_input("تاريخ الإجازة", value=date.today())
-                with c3:
-                    add_day = st.checkbox("تُضاف للمرتبات (يوم إضافي لكل العاملين)", value=True)
-                if st.form_submit_button("إضافة إجازة رسمية", type="primary"):
-                    if h_name.strip():
-                        insert_record("official_holidays", {
-                            "holiday_date": h_date.isoformat(),
-                            "holiday_year": str(h_date.year),
-                            "name_ar": h_name.strip(),
-                            "add_day_to_payroll": bool(add_day),
-                            "active": True,
-                        })
-                        st.success("✅ تمت إضافة الإجازة الرسمية.")
-                        st.rerun()
-
-        if official_holidays:
-            for hol in official_holidays:
-                with st.container(border=True):
-                    c1, c2, c3 = st.columns([3, 2, 1])
-                    c1.write(f"**{hol.get('name_ar')}** — `{str(hol.get('holiday_date'))[:10]}`")
-                    flag_val = bool(hol.get("add_day_to_payroll", True))
-                    if perms.get("manage_settings") or perms.get("manage_payroll"):
-                        new_flag = c2.checkbox("إضافة يوم للمرتبات", value=flag_val, key=f"hol_chk_{hol['id']}")
-                        if new_flag != flag_val:
-                            update_record("official_holidays", hol["id"], {"add_day_to_payroll": new_flag})
-                            st.rerun()
-                        if c3.button("حذف", key=f"hol_del_{hol['id']}"):
-                            delete_record("official_holidays", hol["id"])
-                            st.rerun()
-                    else:
-                        c2.write("تُضاف للمرتبات: نعم" if flag_val else "تُضاف للمرتبات: لا")
 
     with tab_pay:
         st.markdown("#### شيت المرتب الشهري الفعلي والأرشيف")
@@ -2016,17 +1975,19 @@ def render_admin_and_staff(
     departments: List[Dict[str, Any]],
     shifts: List[Dict[str, Any]],
     org_settings: Dict[str, Any],
+    official_holidays: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
     st.markdown("### 👥 إدارة الموظفين والفروع والصلاحيات والإعدادات")
     perms = get_effective_permissions(current_user)
     user_id = str(current_user.get("id"))
     user_role = (current_user.get("role") or "employee").lower()
+    holidays_list = official_holidays or []
 
     if not (perms.get("manage_settings") or perms.get("manage_payroll") or user_role in ("general_manager", "hr")):
         st.warning("هذا القسم مخصص للإدارة والموارد البشرية.")
         return
 
-    tab_emp, tab_org, tab_perms = st.tabs([
+    tab_emp, tab_org, tab_perms_hol = st.tabs([
         "👤 الموظفون وتعديل البيانات",
         "🏢 الفروع",
         "🔐 الصلاحيات والإعدادات",
@@ -2039,7 +2000,6 @@ def render_admin_and_staff(
         for e in employees:
             emp_ref_choices[f"{e.get('name_ar')} ({e.get('role')})"] = e.get("team_user_id") or e.get("id")
 
-        # وقت العمل وعدد الساعات المحسوبة تلقائياً عند إضافة موظف
         t_col1, t_col2, t_col3 = st.columns(3)
         with t_col1:
             add_w_start = st.time_input("من الساعة", value=time(9, 0), key="add_emp_work_start")
@@ -2199,7 +2159,7 @@ def render_admin_and_staff(
             hide_index=True,
         )
 
-    with tab_perms:
+    with tab_perms_hol:
         st.markdown("#### تخصيص صلاحيات مستخدم محدد (بما في ذلك منح المكافآت للـ Senior)")
         if employees:
             pmap = {f"{e.get('name_ar')} ({e.get('role')})": e for e in employees}
@@ -2246,6 +2206,46 @@ def render_admin_and_staff(
                     )
                     st.success("✅ تم تحديث الصلاحيات بنجاح.")
                     st.rerun()
+
+        st.divider()
+        st.markdown("#### 🎉 الإجازات الرسمية والمرتبات (إضافة يوم لكل إجازة مفعّلة)")
+        if perms.get("manage_settings") or perms.get("manage_payroll") or user_role in ("general_manager", "hr"):
+            with st.form("add_holiday_form", clear_on_submit=True):
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    h_name = st.text_input("اسم الإجازة الرسمية", placeholder="مثال: عيد الفطر المبارك")
+                with c2:
+                    h_date = st.date_input("تاريخ الإجازة", value=date.today())
+                with c3:
+                    add_day = st.checkbox("تُضاف للمرتبات (يوم إضافي لكل العاملين)", value=True)
+                if st.form_submit_button("إضافة إجازة رسمية", type="primary"):
+                    if h_name.strip():
+                        insert_record("official_holidays", {
+                            "holiday_date": h_date.isoformat(),
+                            "holiday_year": str(h_date.year),
+                            "name_ar": h_name.strip(),
+                            "add_day_to_payroll": bool(add_day),
+                            "active": True,
+                        })
+                        st.success("✅ تمت إضافة الإجازة الرسمية.")
+                        st.rerun()
+
+        if holidays_list:
+            for hol in holidays_list:
+                with st.container(border=True):
+                    c1, c2, c3 = st.columns([3, 2, 1])
+                    c1.write(f"**{hol.get('name_ar')}** — `{str(hol.get('holiday_date'))[:10]}`")
+                    flag_val = bool(hol.get("add_day_to_payroll", True))
+                    if perms.get("manage_settings") or perms.get("manage_payroll") or user_role in ("general_manager", "hr"):
+                        new_flag = c2.checkbox("إضافة يوم للمرتبات", value=flag_val, key=f"hol_chk_{hol['id']}")
+                        if new_flag != flag_val:
+                            update_record("official_holidays", hol["id"], {"add_day_to_payroll": new_flag})
+                            st.rerun()
+                        if c3.button("حذف", key=f"hol_del_{hol['id']}"):
+                            delete_record("official_holidays", hol["id"])
+                            st.rerun()
+                    else:
+                        c2.write("تُضاف للمرتبات: نعم" if flag_val else "تُضاف للمرتبات: لا")
 
         st.divider()
         st.markdown("#### إعدادات النظام العامة")
