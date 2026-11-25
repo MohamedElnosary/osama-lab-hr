@@ -96,12 +96,8 @@ def _filter_visible_leave_requests(
         return leave_requests
 
     my_ids = _emp_identifiers(current_user)
-    emp_by_any_id: Dict[str, Dict[str, Any]] = {}
-    for e in employees:
-        for k in _emp_identifiers(e):
-            emp_by_any_id[k] = e
-
     subordinate_ids = set(my_ids)
+
     for e in employees:
         e_ids = _emp_identifiers(e)
         if user_role == "senior":
@@ -275,7 +271,6 @@ def render_approvals_inbox(
     st.markdown("### ✅ صندوق الموافقات")
     perms = get_effective_permissions(current_user)
     user_id = str(current_user.get("id"))
-    user_role = (current_user.get("role") or "employee").lower()
 
     if perms.get("is_monitor_only"):
         st.info("حساب رئيس مجلس الإدارة / نائب الرئيس مخصص للمتابعة والاطلاع فقط بدون صلاحية موافقات.")
@@ -391,7 +386,7 @@ def render_approvals_inbox(
 
 
 # =====================================================================
-# 3. منظومة الإجازات والأرصدة (مقيدة الصلاحيات حسب الدور والتبعية)
+# 3. منظومة الإجازات والأرصدة (حساب تلقائي للأيام + 4 فلاتر في السجل)
 # =====================================================================
 def render_leaves_module(
     current_user: Dict[str, Any],
@@ -420,7 +415,6 @@ def render_leaves_module(
     annual_rem = float(my_bal.get("annual") or 0) - float(my_bal.get("used_annual") or 0)
     casual_rem = float(my_bal.get("casual") or 0) - float(my_bal.get("used_casual") or 0)
 
-    # رصيد الموظف الحالي فقط
     b1, b2, b3 = st.columns(3)
     b1.metric("رصيدي الاعتيادي/السنوي المتبقي", round_half_up_2(annual_rem))
     b2.metric("رصيدي العارضة المتبقي", round_half_up_2(casual_rem))
@@ -433,6 +427,7 @@ def render_leaves_module(
 
     tabs = st.tabs(tab_titles)
 
+    # --- التاب الأول: تقديم طلب إجازة بحساب تلقائي لعدد الأيام ---
     with tabs[0]:
         active_types = [lt for lt in leave_types if lt.get("active", True)]
         if not active_types:
@@ -449,15 +444,29 @@ def render_leaves_module(
                 f"تفعيل الرصيد بعد: {chosen_type.get('min_tenure_days', 30)} يوم من التعيين"
             )
 
-            with st.form("submit_leave_form", clear_on_submit=False):
-                c1, c2, c3 = st.columns(3)
-                with c1:
-                    start_dt = st.date_input("تاريخ البداية", value=date.today())
-                with c2:
-                    end_dt = st.date_input("تاريخ النهاية", value=date.today())
-                with c3:
-                    days_val = st.number_input("عدد الأيام", min_value=0.5, max_value=60.0, value=1.0, step=0.5)
+            c1, c2 = st.columns(2)
+            with c1:
+                start_dt = st.date_input("تاريخ البداية", value=date.today(), key="leave_start_dt")
+            with c2:
+                end_dt = st.date_input("تاريخ النهاية", value=start_dt, min_value=start_dt, key="leave_end_dt")
 
+            # حساب عدد الأيام تلقائياً من تاريخ البداية وتاريخ النهاية
+            if end_dt < start_dt:
+                auto_days = 0.0
+            else:
+                auto_days = float((end_dt - start_dt).days + 1)
+
+            half_day_opt = st.checkbox(
+                "خصم نصف يوم فقط (في حال طلب نصف يوم على نفس اليوم)",
+                value=False,
+                disabled=(auto_days != 1.0),
+                key="leave_half_day_chk",
+            )
+            days_val = 0.5 if (auto_days == 1.0 and half_day_opt) else auto_days
+
+            st.info(f"📅 عدد الأيام المحسوب تلقائياً: **{days_val:g}** يوم")
+
+            with st.form("submit_leave_form", clear_on_submit=False):
                 reason_val = st.text_area("السبب / ملاحظات", placeholder="اكتب السبب (مطلوب للإجازة المرضية أو التوضيح)")
                 uploaded_file = st.file_uploader(
                     "إرفاق تقرير / مستند (مطلوب للتقرير المرضي)",
@@ -518,36 +527,62 @@ def render_leaves_module(
                             "leave_requests",
                             "create_leave_request",
                             "إضافة",
-                            f"تقديم طلب {chosen_type.get('name_ar')} ({days_val} يوم) للموظف {current_user.get('name_ar')}",
+                            f"تقديم طلب {chosen_type.get('name_ar')} ({days_val:g} يوم) للموظف {current_user.get('name_ar')}",
                             by_name=current_user.get("name_ar", ""),
                             by_user_id=user_id,
                         )
                         st.success("✅ تم إرسال طلب الإجازة بنجاح وإدراجه في مسار الموافقات.")
                         st.rerun()
 
+    # --- التاب الثاني: سجل الإجازات مع 4 فلاتر ---
     with tabs[1]:
         visible_requests = _filter_visible_leave_requests(current_user, employees, leave_requests)
         if visible_requests:
-            st.dataframe(
-                [
-                    {
-                        "الموظف": lr.get("employee_name"),
-                        "الفرع": dept_names.get(str(lr.get("department_id") or ""), "—"),
-                        "النوع": lr.get("type_name"),
-                        "من": str(lr.get("start_date"))[:10],
-                        "إلى": str(lr.get("end_date"))[:10],
-                        "الأيام": lr.get("days"),
-                        "الحالة": lr.get("status"),
-                        "السبب": lr.get("reason") or "—",
-                    }
-                    for lr in visible_requests
-                ],
-                use_container_width=True,
-                hide_index=True,
-            )
+            enriched_rows = []
+            for lr in visible_requests:
+                branch_label = dept_names.get(str(lr.get("department_id") or ""), "بدون فرع")
+                emp_label = lr.get("employee_name") or "غير محدد"
+                type_label = lr.get("type_name") or lr.get("type_code") or "غير محدد"
+                status_label = lr.get("status") or "—"
+                enriched_rows.append({
+                    "الموظف": emp_label,
+                    "الفرع": branch_label,
+                    "نوع الإجازة": type_label,
+                    "من": str(lr.get("start_date") or "")[:10],
+                    "إلى": str(lr.get("end_date") or "")[:10],
+                    "الأيام": lr.get("days"),
+                    "الحالة": status_label,
+                    "السبب": lr.get("reason") or "—",
+                })
+
+            f1, f2, f3, f4 = st.columns(4)
+            emp_filter_opts = ["الكل"] + sorted({r["الموظف"] for r in enriched_rows})
+            branch_filter_opts = ["الكل"] + sorted({r["الفرع"] for r in enriched_rows})
+            type_filter_opts = ["الكل"] + sorted({r["نوع الإجازة"] for r in enriched_rows})
+            status_filter_opts = ["الكل"] + sorted({r["الحالة"] for r in enriched_rows})
+
+            sel_emp_f = f1.selectbox("فلتر باسم الموظف", emp_filter_opts, key="lf_emp")
+            sel_branch_f = f2.selectbox("فلتر باسم الفرع", branch_filter_opts, key="lf_branch")
+            sel_type_f = f3.selectbox("فلتر بنوع الإجازة", type_filter_opts, key="lf_type")
+            sel_status_f = f4.selectbox("فلتر بالحالة", status_filter_opts, key="lf_status")
+
+            filtered_table = [
+                r for r in enriched_rows
+                if (sel_emp_f == "الكل" or r["الموظف"] == sel_emp_f)
+                and (sel_branch_f == "الكل" or r["الفرع"] == sel_branch_f)
+                and (sel_type_f == "الكل" or r["نوع الإجازة"] == sel_type_f)
+                and (sel_status_f == "الكل" or r["الحالة"] == sel_status_f)
+            ]
+
+            st.caption(f"عدد السجلات المعروضة: {len(filtered_table)} من {len(enriched_rows)}")
+            if filtered_table:
+                st.dataframe(filtered_table, use_container_width=True, hide_index=True)
+            else:
+                st.info("لا توجد نتائج مطابقة للفلاتر المختارة.")
         else:
             st.info("لا توجد طلبات إجازات ضمن نطاق صلاحياتك حالياً.")
 
+    # --- التاب الثالث: أرصدة جميع الموظفين (للمدير العام / رئيس مجلس الإدارة / HR فقط) ---
     if can_view_all_balances and len(tabs) > 2:
         with tabs[2]:
             st.markdown("#### أرصدة جميع الموظفين، الاحتساب النسبي، وتجديد بداية السنة")
