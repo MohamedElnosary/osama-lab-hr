@@ -125,10 +125,7 @@ def calculate_prorated_leave_entitlement(
     casual_base: float = 6.0,
     is_annual_reset: bool = False,
 ) -> Tuple[float, float, str]:
-    """
-    حساب الاستحقاق السنوي والعارض بدون أي كسور (أعداد صحيحة فقط)،
-    مع جعل النصيب الأكبر في الاعتيادي.
-    """
+    """حساب الاستحقاق السنوي والعارض بدون أي كسور (أعداد صحيحة فقط)."""
     full_annual = float(round_nearest_int(annual_base))
     full_casual = float(round_nearest_int(casual_base))
 
@@ -189,12 +186,13 @@ def has_completed_min_tenure(hire_date_val: Any, ref_date: date, min_days: int =
 def determine_initial_approval_route(
     employee: Dict[str, Any],
     all_employees: List[Dict[str, Any]],
+    backup_employee: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     تحديد مسار الموافقات الأولي لطلب الإجازة:
-    - إذا كان الموظف تابعاً لـ Senior (له senior_id): يمر أولاً على الـ Senior ثم المدير المباشر/الفرع ثم المدير العام.
-    - إذا كان الموظف هو Senior نفسه أو تحت مدير مباشر/فرع: يمر على المدير المباشر/الفرع ثم المدير العام.
-    - إذا لم يكن له مدير مباشر: يمر مباشرة للمدير العام.
+    - إذا تم اختيار موظف بديل: يذهب أولاً إلى الموظف البديل (pending_backup)،
+      وعند موافقته ينتقل إلى الـ Senior (إن وُجد) ثم المدير المباشر ثم المدير العام.
+    - إذا تم اختيار (بدون بديل): ينتقل مباشرة إلى الـ Senior (إن وُجد) أو المدير المباشر ثم المدير العام.
     """
     senior_id = employee.get("senior_id")
     direct_manager_id = employee.get("direct_manager_id")
@@ -211,19 +209,38 @@ def determine_initial_approval_route(
     senior_emp = _resolve_emp(senior_id)
     manager_emp = _resolve_emp(direct_manager_id)
 
-    if senior_emp and str(senior_emp.get("id")) != str(employee.get("id")):
+    resolved_senior_id = (
+        (senior_emp.get("team_user_id") or senior_emp.get("id"))
+        if (senior_emp and str(senior_emp.get("id")) != str(employee.get("id")))
+        else None
+    )
+    resolved_manager_id = (
+        (manager_emp.get("team_user_id") or manager_emp.get("id"))
+        if (manager_emp and str(manager_emp.get("id")) != str(employee.get("id")))
+        else None
+    )
+
+    if backup_employee and str(backup_employee.get("id")) != str(employee.get("id")):
+        return {
+            "status": "pending_backup",
+            "senior_id": resolved_senior_id,
+            "direct_manager_id": resolved_manager_id,
+            "next_stage": "backup",
+        }
+
+    if resolved_senior_id:
         return {
             "status": "pending_senior",
-            "senior_id": senior_emp.get("team_user_id") or senior_emp.get("id"),
-            "direct_manager_id": (manager_emp.get("team_user_id") or manager_emp.get("id")) if manager_emp else None,
+            "senior_id": resolved_senior_id,
+            "direct_manager_id": resolved_manager_id,
             "next_stage": "senior",
         }
 
-    if manager_emp and str(manager_emp.get("id")) != str(employee.get("id")):
+    if resolved_manager_id:
         return {
             "status": "pending_manager",
             "senior_id": None,
-            "direct_manager_id": manager_emp.get("team_user_id") or manager_emp.get("id"),
+            "direct_manager_id": resolved_manager_id,
             "next_stage": "manager",
         }
 
@@ -247,9 +264,7 @@ def validate_leave_request(
     reason_text: str = "",
     now_dt: Optional[datetime] = None,
 ) -> Tuple[bool, str]:
-    """
-    التحقق الكامل من صحة طلب الإجازة وفق قواعد معامل أ.د أسامة عبد المتعال منصور.
-    """
+    """التحقق الكامل من صحة طلب الإجازة وفق قواعد معامل أ.د أسامة عبد المتعال منصور."""
     current_dt = now_dt or datetime.now()
     today_date = current_dt.date()
 
