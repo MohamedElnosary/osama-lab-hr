@@ -71,6 +71,30 @@ def _parse_time_safe(val: Any, default_t: time) -> time:
     return default_t
 
 
+def _normalize_time_text(raw_val: Any) -> Optional[str]:
+    """
+    تنظيف وتحويل أي صيغة وقت مقبولة (مثل 9:00 أو 09:00 أو 09:00:00) إلى HH:MM:SS.
+    تُرجع None إذا كانت القيمة فارغة أو غير صالحة.
+    """
+    if raw_val is None:
+        return None
+    s = str(raw_val).strip()
+    if not s or s.lower() in ("none", "nan", "—", "-"):
+        return None
+    parts = s.split(":")
+    if len(parts) < 2:
+        return None
+    try:
+        hh = int(parts[0])
+        mm = int(parts[1])
+        ss = int(parts[2]) if len(parts) >= 3 else 0
+        if not (0 <= hh <= 23 and 0 <= mm <= 59 and 0 <= ss <= 59):
+            return None
+        return f"{hh:02d}:{mm:02d}:{ss:02d}"
+    except ValueError:
+        return None
+
+
 def _sync_leave_days_state() -> None:
     """تحديث عدد أيام الإجازة في session_state فوراً عند تغيير تاريخ البداية أو النهاية."""
     s = parse_date_safe(st.session_state.get("lr_start_date_input"))
@@ -1623,6 +1647,7 @@ def render_attendance_and_payroll(
     st.markdown("### ⏱️ البصمة والـ Payroll")
     perms = get_effective_permissions(current_user)
     user_id = str(current_user.get("id"))
+    my_ids = _emp_identifiers(current_user)
     user_role = (current_user.get("role") or "employee").lower()
     all_leaves = leave_requests or []
 
@@ -1662,13 +1687,20 @@ def render_attendance_and_payroll(
         sheet_rows = []
         for d_item in cycle_days:
             d_iso = d_item.isoformat()
-            rec = att_by_emp_date.get((user_id, d_iso), {})
+            rec: Dict[str, Any] = {}
+            for candidate_id in my_ids:
+                if (candidate_id, d_iso) in att_by_emp_date:
+                    rec = att_by_emp_date[(candidate_id, d_iso)]
+                    break
+
             leave_txt = my_leave_map.get(d_iso, "")
+            cin_disp = str(rec.get("check_in") or "")[:5] if rec.get("check_in") else ("ممنوع البصمة — إجازة" if leave_txt else "—")
+            cout_disp = str(rec.get("check_out") or "")[:5] if rec.get("check_out") else ("ممنوع البصمة — إجازة" if leave_txt else "—")
             sheet_rows.append({
                 "التاريخ (work_date)": d_iso,
-                "حالة الإجازة": leave_txt or ("—" if not rec.get("check_in") else "حضور / دوام"),
-                "دخول (check_in)": rec.get("check_in") or ("ممنوع البصمة — إجازة" if leave_txt else "—"),
-                "انصراف (check_out)": rec.get("check_out") or ("ممنوع البصمة — إجازة" if leave_txt else "—"),
+                "حالة الإجازة": leave_txt or ("حضور / دوام" if rec.get("check_in") else "—"),
+                "دخول (check_in)": cin_disp,
+                "انصراف (check_out)": cout_disp,
                 "تأخير (دقيقة)": rec.get("late_minutes", 0),
                 "إضافي (دقيقة)": rec.get("overtime_minutes", 0),
             })
@@ -1689,7 +1721,8 @@ def render_attendance_and_payroll(
 
             if att_mode == "رفع ملف البصمة (Excel / CSV)":
                 st.caption(
-                    f"الأعمدة المطلوبة في ملف البصمة: `employee_no`، `work_date` (YYYY-MM-DD)، `check_in` (HH:MM)، `check_out` (HH:MM) — "
+                    f"الأعمدة المطلوبة: `employee_no`، `work_date` (مثال: `2026-11-05`)، "
+                    f"`check_in` (مثال: `09:00`)، `check_out` (مثال: `17:00`) بنظام 24 ساعة — "
                     f"سماح الحضور: {grace_late} دقيقة | سماح الانصراف: {grace_early} دقيقة."
                 )
                 att_file = st.file_uploader("رفع ملف البصمة", type=["xlsx", "xls", "csv"], key="att_excel_uploader")
@@ -1713,12 +1746,12 @@ def render_attendance_and_payroll(
                                 continue
                             s_start = str(emp.get("work_start_time") or "09:00:00")
                             s_end = str(emp.get("work_end_time") or "17:00:00")
-                            cin_str = str(r.get("check_in") or "").strip()
-                            cout_str = str(r.get("check_out") or "").strip()
+                            cin_norm = _normalize_time_text(r.get("check_in"))
+                            cout_norm = _normalize_time_text(r.get("check_out"))
 
                             eval_res = evaluate_attendance_record(
-                                cin_str,
-                                cout_str,
+                                cin_norm or "",
+                                cout_norm or "",
                                 s_start,
                                 s_end,
                                 grace_late_minutes=grace_late,
@@ -1730,8 +1763,8 @@ def render_attendance_and_payroll(
                                 {
                                     "employee_id": emp["id"],
                                     "work_date": w_dt.isoformat(),
-                                    "check_in": cin_str or None,
-                                    "check_out": cout_str or None,
+                                    "check_in": cin_norm,
+                                    "check_out": cout_norm,
                                     "scheduled_start": s_start,
                                     "scheduled_end": s_end,
                                     "late_minutes": eval_res["late_minutes"],
@@ -1755,7 +1788,6 @@ def render_attendance_and_payroll(
                         st.rerun()
 
             else:
-                # الإدخال اليدوي (Manual) كشيت حسب الشهر (21 إلى 20) واختيار الموظف
                 mc1, mc2 = st.columns(2)
                 with mc1:
                     man_ym = st.text_input("الشهر (YYYY-MM)", value=date.today().strftime("%Y-%m"), key="man_att_ym")
@@ -1766,6 +1798,7 @@ def render_attendance_and_payroll(
 
                 man_emp = man_emp_map[sel_man_emp_lbl]
                 man_emp_id = str(man_emp["id"])
+                man_emp_all_ids = _emp_identifiers(man_emp)
                 man_days = _get_cycle_dates_for_month(man_ym)
                 man_leave_map = _get_leave_map_for_employee(man_emp, all_leaves)
 
@@ -1773,17 +1806,26 @@ def render_attendance_and_payroll(
                     f"الموظف: **{man_emp.get('name_ar')}** | رقم: `{man_emp.get('employee_no')}` | "
                     f"الفترة: `{man_days[0].isoformat()}` إلى `{man_days[-1].isoformat()}`"
                 )
+                st.info(
+                    "📌 **صيغة إدخال الوقت (نظام 24 ساعة HH:MM):** "
+                    "مثال للدخول (`check_in`): **`09:00`** أو **`09:15`** | "
+                    "مثال للانصراف (`check_out`): **`17:00`** أو **`17:30`**"
+                )
 
                 grid_seed = []
                 for d_obj in man_days:
                     d_iso = d_obj.isoformat()
-                    existing_rec = att_by_emp_date.get((man_emp_id, d_iso), {})
+                    existing_rec: Dict[str, Any] = {}
+                    for cid in man_emp_all_ids:
+                        if (cid, d_iso) in att_by_emp_date:
+                            existing_rec = att_by_emp_date[(cid, d_iso)]
+                            break
                     lv_label = man_leave_map.get(d_iso, "")
                     grid_seed.append({
                         "التاريخ": d_iso,
                         "الإجازة": lv_label or "—",
-                        "check_in": str(existing_rec.get("check_in") or ""),
-                        "check_out": str(existing_rec.get("check_out") or ""),
+                        "check_in": str(existing_rec.get("check_in") or "")[:5],
+                        "check_out": str(existing_rec.get("check_out") or "")[:5],
                     })
 
                 edited_df = st.data_editor(
@@ -1791,6 +1833,16 @@ def render_attendance_and_payroll(
                     use_container_width=True,
                     hide_index=True,
                     disabled=["التاريخ", "الإجازة"],
+                    column_config={
+                        "check_in": st.column_config.TextColumn(
+                            "دخول check_in (مثال 09:00)",
+                            help="اكتب وقت الحضور بصيغة HH:MM مثل 09:00",
+                        ),
+                        "check_out": st.column_config.TextColumn(
+                            "انصراف check_out (مثال 17:00)",
+                            help="اكتب وقت الانصراف بصيغة HH:MM مثل 17:00",
+                        ),
+                    },
                     key=f"manual_att_editor_{man_emp_id}_{man_ym}",
                 )
 
@@ -1798,19 +1850,29 @@ def render_attendance_and_payroll(
                     s_start = str(man_emp.get("work_start_time") or "09:00:00")
                     s_end = str(man_emp.get("work_end_time") or "17:00:00")
                     saved_man = 0
+                    invalid_rows: List[str] = []
+
                     for _, row_item in edited_df.iterrows():
                         d_iso = str(row_item.get("التاريخ") or "").strip()
-                        cin_val = str(row_item.get("check_in") or "").strip()
-                        cout_val = str(row_item.get("check_out") or "").strip()
-                        if not cin_val and not cout_val:
+                        raw_cin = str(row_item.get("check_in") or "").strip()
+                        raw_cout = str(row_item.get("check_out") or "").strip()
+                        if not raw_cin and not raw_cout:
                             continue
+
+                        cin_norm = _normalize_time_text(raw_cin) if raw_cin else None
+                        cout_norm = _normalize_time_text(raw_cout) if raw_cout else None
+
+                        if (raw_cin and not cin_norm) or (raw_cout and not cout_norm):
+                            invalid_rows.append(d_iso)
+                            continue
+
                         w_dt = parse_date_safe(d_iso)
                         if not w_dt:
                             continue
 
                         eval_res = evaluate_attendance_record(
-                            cin_val,
-                            cout_val,
+                            cin_norm or "",
+                            cout_norm or "",
                             s_start,
                             s_end,
                             grace_late_minutes=grace_late,
@@ -1822,8 +1884,8 @@ def render_attendance_and_payroll(
                             {
                                 "employee_id": man_emp["id"],
                                 "work_date": w_dt.isoformat(),
-                                "check_in": cin_val or None,
-                                "check_out": cout_val or None,
+                                "check_in": cin_norm,
+                                "check_out": cout_norm,
                                 "scheduled_start": s_start,
                                 "scheduled_end": s_end,
                                 "late_minutes": eval_res["late_minutes"],
@@ -1835,16 +1897,22 @@ def render_attendance_and_payroll(
                         )
                         saved_man += 1
 
-                    write_audit_log(
-                        "attendance_logs",
-                        "manual_attendance",
-                        "تعديل",
-                        f"إدخال/تحديث {saved_man} سجل بصمة يدوياً للموظف {man_emp.get('name_ar')} لشهر {man_ym}",
-                        by_name=current_user.get("name_ar", ""),
-                        by_user_id=user_id,
-                    )
-                    st.success(f"✅ تم حفظ {saved_man} سجل بصمة للموظف {man_emp.get('name_ar')}.")
-                    st.rerun()
+                    if invalid_rows:
+                        st.warning(
+                            f"⚠️ لم يتم حفظ التواريخ التالية بسبب صيغة وقت غير صحيحة ({', '.join(invalid_rows)}) — يرجى الكتابة بصيغة HH:MM مثل 09:00 و 17:00."
+                        )
+
+                    if saved_man > 0:
+                        write_audit_log(
+                            "attendance_logs",
+                            "manual_attendance",
+                            "تعديل",
+                            f"إدخال/تحديث {saved_man} سجل بصمة يدوياً للموظف {man_emp.get('name_ar')} لشهر {man_ym}",
+                            by_name=current_user.get("name_ar", ""),
+                            by_user_id=user_id,
+                        )
+                        st.success(f"✅ تم حفظ {saved_man} سجل بصمة للموظف {man_emp.get('name_ar')} بنجاح.")
+                        st.rerun()
         t_idx += 1
 
     # --- 3) سجل الوقت الإضافي ---
