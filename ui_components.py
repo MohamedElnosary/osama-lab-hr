@@ -71,6 +71,89 @@ def _parse_time_safe(val: Any, default_t: time) -> time:
     return default_t
 
 
+def _to_minutes_from_any_time(val: Any) -> Optional[int]:
+    if val is None or val == "":
+        return None
+    if isinstance(val, datetime):
+        t = val.time()
+        return t.hour * 60 + t.minute
+    if isinstance(val, time):
+        return val.hour * 60 + val.minute
+    if isinstance(val, str):
+        txt = val.strip()
+        if not txt or txt.lower() in ("none", "nan", "—", "-"):
+            return None
+        parts = txt.split(":")
+        if len(parts) >= 2:
+            try:
+                hh = int(parts[0])
+                mm = int(parts[1])
+                if 0 <= hh <= 23 and 0 <= mm <= 59:
+                    return hh * 60 + mm
+            except ValueError:
+                return None
+    return None
+
+
+def _compute_attendance_breakdown(
+    rec: Dict[str, Any],
+    emp: Dict[str, Any],
+    grace_late_minutes: int = 15,
+    grace_early_minutes: int = 5,
+) -> Dict[str, int]:
+    """
+    تفصيل الحضور والانصراف بدقة لكل يوم:
+    - تأخير دخول (دقيقة): بعد scheduled_start متجاوزاً سماح الحضور.
+    - مبكر دخول (دقيقة): قبل scheduled_start.
+    - مبكر انصراف (دقيقة): قبل scheduled_end.
+    - إضافي انصراف (دقيقة): بعد scheduled_end.
+    """
+    s_start_m = _to_minutes_from_any_time(rec.get("scheduled_start") or emp.get("work_start_time") or "09:00:00")
+    if s_start_m is None:
+        s_start_m = 9 * 60
+
+    s_end_m = _to_minutes_from_any_time(rec.get("scheduled_end") or emp.get("work_end_time") or "17:00:00")
+    if s_end_m is None:
+        s_end_m = 17 * 60
+    if s_end_m <= s_start_m:
+        s_end_m += 24 * 60
+
+    cin_m = _to_minutes_from_any_time(rec.get("check_in"))
+    cout_m = _to_minutes_from_any_time(rec.get("check_out"))
+
+    late_in = 0
+    early_in = 0
+    if cin_m is not None:
+        diff_in = cin_m - s_start_m
+        if diff_in > max(0, int(grace_late_minutes or 0)):
+            late_in = int(diff_in)
+        elif diff_in < 0:
+            early_in = int(abs(diff_in))
+    elif int(rec.get("late_minutes") or 0) > 0:
+        late_in = int(rec.get("late_minutes") or 0)
+
+    early_out = 0
+    overtime_out = 0
+    if cout_m is not None:
+        w_cout_m = cout_m + (24 * 60 if cout_m < s_start_m else 0)
+        if w_cout_m < s_end_m:
+            early_out = int(s_end_m - w_cout_m)
+        elif w_cout_m > s_end_m:
+            overtime_out = int(w_cout_m - s_end_m)
+    else:
+        if int(rec.get("early_leave_minutes") or 0) > 0:
+            early_out = int(rec.get("early_leave_minutes") or 0)
+        if int(rec.get("overtime_minutes") or 0) > 0:
+            overtime_out = int(rec.get("overtime_minutes") or 0)
+
+    return {
+        "late_in": late_in,
+        "early_in": early_in,
+        "early_out": early_out,
+        "overtime_out": overtime_out,
+    }
+
+
 def _normalize_time_text(raw_val: Any) -> Optional[str]:
     """
     تنظيف وتحويل أي صيغة وقت مقبولة (مثل 9:00 أو 09:00 أو 09:00:00) إلى HH:MM:SS.
@@ -1680,7 +1763,10 @@ def render_attendance_and_payroll(
         st.markdown("#### شيت البصمة (الفترة من يوم 21 الشهر السابق إلى يوم 20 الشهر المختار)")
         sheet_ym = st.text_input("اختر الشهر (YYYY-MM)", value=date.today().strftime("%Y-%m"), key="att_sheet_ym")
         cycle_days = _get_cycle_dates_for_month(sheet_ym)
-        st.caption(f"الفترة المعروضة: من `{cycle_days[0].isoformat()}` إلى `{cycle_days[-1].isoformat()}` — عرض فقط بدون تعديل.")
+        st.caption(
+            f"الفترة المعروضة: من `{cycle_days[0].isoformat()}` إلى `{cycle_days[-1].isoformat()}` — "
+            f"سماح الحضور: {grace_late} دقيقة | سماح الانصراف: {grace_early} دقيقة — عرض فقط بدون تعديل."
+        )
 
         my_leave_map = _get_leave_map_for_employee(current_user, all_leaves)
         sheet_rows = []
@@ -1693,15 +1779,25 @@ def render_attendance_and_payroll(
                     break
 
             leave_txt = my_leave_map.get(d_iso, "")
+            has_att = bool(rec.get("check_in") or rec.get("check_out"))
+            bd = _compute_attendance_breakdown(rec, current_user, grace_late, grace_early) if has_att else {
+                "late_in": int(rec.get("late_minutes") or 0),
+                "early_in": 0,
+                "early_out": int(rec.get("early_leave_minutes") or 0),
+                "overtime_out": int(rec.get("overtime_minutes") or 0),
+            }
+
             cin_disp = str(rec.get("check_in") or "")[:5] if rec.get("check_in") else ("ممنوع البصمة — إجازة" if leave_txt else "—")
             cout_disp = str(rec.get("check_out") or "")[:5] if rec.get("check_out") else ("ممنوع البصمة — إجازة" if leave_txt else "—")
             sheet_rows.append({
                 "التاريخ (work_date)": d_iso,
-                "حالة الإجازة": leave_txt or ("حضور / دوام" if rec.get("check_in") else "—"),
+                "حالة الإجازة": leave_txt or ("حضور / دوام" if has_att else "—"),
                 "دخول (check_in)": cin_disp,
                 "انصراف (check_out)": cout_disp,
-                "تأخير (دقيقة)": rec.get("late_minutes", 0),
-                "إضافي (دقيقة)": rec.get("overtime_minutes", 0),
+                "تأخير دخول (دقيقة)": bd["late_in"],
+                "مبكر دخول (دقيقة)": bd["early_in"],
+                "مبكر انصراف (دقيقة)": bd["early_out"],
+                "إضافي انصراف (دقيقة)": bd["overtime_out"],
             })
 
         st.dataframe(sheet_rows, use_container_width=True, hide_index=True)
@@ -1802,6 +1898,7 @@ def render_attendance_and_payroll(
 
                 st.caption(
                     f"الموظف: **{man_emp.get('name_ar')}** | رقم: `{man_emp.get('employee_no')}` | "
+                    f"مواعيد العمل: `{str(man_emp.get('work_start_time') or '09:00')[:5]}` إلى `{str(man_emp.get('work_end_time') or '17:00')[:5]}` | "
                     f"الفترة: `{man_days[0].isoformat()}` إلى `{man_days[-1].isoformat()}`"
                 )
                 st.info(
@@ -1819,18 +1916,27 @@ def render_attendance_and_payroll(
                             existing_rec = att_by_emp_date[(cid, d_iso)]
                             break
                     lv_label = man_leave_map.get(d_iso, "")
+                    bd = _compute_attendance_breakdown(existing_rec, man_emp, grace_late, grace_early) if existing_rec else {
+                        "late_in": 0,
+                        "early_in": 0,
+                        "early_out": 0,
+                        "overtime_out": 0,
+                    }
                     grid_seed.append({
                         "التاريخ": d_iso,
                         "الإجازة": lv_label or "—",
                         "check_in": str(existing_rec.get("check_in") or "")[:5],
                         "check_out": str(existing_rec.get("check_out") or "")[:5],
+                        "تأخير دخول": bd["late_in"],
+                        "مبكر انصراف": bd["early_out"],
+                        "إضافي انصراف": bd["overtime_out"],
                     })
 
                 edited_df = st.data_editor(
                     pd.DataFrame(grid_seed),
                     use_container_width=True,
                     hide_index=True,
-                    disabled=["التاريخ", "الإجازة"],
+                    disabled=["التاريخ", "الإجازة", "تأخير دخول", "مبكر انصراف", "إضافي انصراف"],
                     column_config={
                         "check_in": st.column_config.TextColumn(
                             "دخول check_in (مثال 09:00)",
