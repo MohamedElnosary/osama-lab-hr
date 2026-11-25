@@ -102,11 +102,11 @@ def _compute_attendance_breakdown(
     grace_early_minutes: int = 5,
 ) -> Dict[str, int]:
     """
-    تفصيل الحضور والانصراف بدقة لكل يوم:
-    - تأخير دخول (دقيقة): بعد scheduled_start متجاوزاً سماح الحضور.
-    - مبكر دخول (دقيقة): قبل scheduled_start.
-    - مبكر انصراف (دقيقة): قبل scheduled_end.
-    - إضافي انصراف (دقيقة): بعد scheduled_end.
+    تفصيل الحضور والانصراف بعد خصم السماح المقرر من الإعدادات:
+    - تأخير دخول (دقيقة): صافي التأخير بعد خصم سماح الحضور (مثال: 16 - 15 = 1).
+    - مبكر دخول (دقيقة): دقائق الحضور قبل بداية الدوام.
+    - مبكر انصراف (دقيقة): صافي الانصراف المبكر بعد خصم سماح الانصراف (مثال: 10 - 5 = 5).
+    - إضافي انصراف (دقيقة): دقائق العمل بعد نهاية الدوام.
     """
     s_start_m = _to_minutes_from_any_time(rec.get("scheduled_start") or emp.get("work_start_time") or "09:00:00")
     if s_start_m is None:
@@ -121,28 +121,34 @@ def _compute_attendance_breakdown(
     cin_m = _to_minutes_from_any_time(rec.get("check_in"))
     cout_m = _to_minutes_from_any_time(rec.get("check_out"))
 
+    late_grace = max(0, int(grace_late_minutes or 0))
+    early_grace = max(0, int(grace_early_minutes or 0))
+
     late_in = 0
     early_in = 0
     if cin_m is not None:
         diff_in = cin_m - s_start_m
-        if diff_in > max(0, int(grace_late_minutes or 0)):
-            late_in = int(diff_in)
+        if diff_in > late_grace:
+            late_in = int(diff_in - late_grace)
         elif diff_in < 0:
             early_in = int(abs(diff_in))
-    elif int(rec.get("late_minutes") or 0) > 0:
-        late_in = int(rec.get("late_minutes") or 0)
+    else:
+        raw_l = int(rec.get("late_minutes") or 0)
+        late_in = max(0, raw_l - late_grace) if raw_l > late_grace else 0
 
     early_out = 0
     overtime_out = 0
     if cout_m is not None:
         w_cout_m = cout_m + (24 * 60 if cout_m < s_start_m else 0)
         if w_cout_m < s_end_m:
-            early_out = int(s_end_m - w_cout_m)
+            raw_e = int(s_end_m - w_cout_m)
+            if raw_e > early_grace:
+                early_out = int(raw_e - early_grace)
         elif w_cout_m > s_end_m:
             overtime_out = int(w_cout_m - s_end_m)
     else:
-        if int(rec.get("early_leave_minutes") or 0) > 0:
-            early_out = int(rec.get("early_leave_minutes") or 0)
+        raw_e = int(rec.get("early_leave_minutes") or 0)
+        early_out = max(0, raw_e - early_grace) if raw_e > early_grace else 0
         if int(rec.get("overtime_minutes") or 0) > 0:
             overtime_out = int(rec.get("overtime_minutes") or 0)
 
@@ -209,7 +215,6 @@ def _get_cycle_dates_for_month(ym_str: str) -> List[date]:
     """
     إرجاع قائمة التواريخ الكاملة للشهر الإداري:
     من يوم 21 في الشهر السابق حتى يوم 20 في الشهر المختار (YYYY-MM).
-    مثال: شهر 2026-11 -> من 2026-10-21 إلى 2026-11-20.
     """
     try:
         parts = str(ym_str or "").strip()[:7].split("-")
@@ -236,9 +241,7 @@ def _get_leave_map_for_employee(
     emp: Dict[str, Any],
     leave_requests: List[Dict[str, Any]],
 ) -> Dict[str, str]:
-    """
-    بناء خريطة {YYYY-MM-DD: وصف الإجازة} للموظف من طلبات الإجازة غير المرفوضة/الملغاة.
-    """
+    """بناء خريطة {YYYY-MM-DD: وصف الإجازة} للموظف من طلبات الإجازة غير المرفوضة/الملغاة."""
     emp_ids = _emp_identifiers(emp)
     leave_by_day: Dict[str, str] = {}
 
@@ -302,10 +305,7 @@ def _build_remaining_schedule_for_employee(
     target_ym: str,
     advances: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    """
-    حساب السلف المتبقية على مدار الشهور لموظف معين بدءاً من الشهر المستهدف:
-    يعرض إجمالي المتبقي، وجدولاً بالشهور وقيمة السلفة في كل شهر، وآخر شهر سداد.
-    """
+    """حساب السلف المتبقية على مدار الشهور لموظف معين بدءاً من الشهر المستهدف."""
     monthly_totals: Dict[str, float] = {}
     total_remaining_all = 0.0
 
@@ -357,12 +357,7 @@ def _get_subordinate_employees(
     current_user: Dict[str, Any],
     employees: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """
-    إرجاع الموظفين الذين هم تحت سلطة المستخدم الحالي فقط (بدون نفسه وبدون من هم أعلى منه):
-    - المدير العام: كل الموظفين النشطين ما عدا نفسه.
-    - المدير المباشر: التابعون له مباشرة أو ضمن فرعه (باستثناء نفسه والأدوار الأعلى).
-    - الـ Senior: الموظفون التابعون له كـ Senior فقط (باستثناء نفسه).
-    """
+    """إرجاع الموظفين الذين هم تحت سلطة المستخدم الحالي فقط."""
     user_role = (current_user.get("role") or "employee").strip().lower()
     my_ids = _emp_identifiers(current_user)
     my_dept = str(current_user.get("department_id") or "")
@@ -401,12 +396,7 @@ def _get_advance_eligible_targets(
     current_user: Dict[str, Any],
     employees: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """
-    تحديد الموظفين المسموح بتقديم طلب سلفة لهم:
-    - الموظف العادي أو الـ Senior: نفسه فقط.
-    - المدير المباشر: نفسه + الموظفون التابعون له تحت سلطته.
-    - المدير العام: نفسه + كل الموظفين النشطين.
-    """
+    """تحديد الموظفين المسموح بتقديم طلب سلفة لهم."""
     user_role = (current_user.get("role") or "employee").strip().lower()
     my_ids = _emp_identifiers(current_user)
 
@@ -435,12 +425,7 @@ def _filter_visible_advances(
     employees: List[Dict[str, Any]],
     advances: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """
-    تصفية سجل السلف:
-    - المدير العام / رئيس مجلس الإدارة / نائب الرئيس / HR: يرون الكل.
-    - المدير المباشر: يرى السلف الخاصة به + السلف الخاصة بالموظفين الذين تحت اسمه/سلطته فقط.
-    - باقي الموظفين (بما فيهم الـ Senior): يرون السلف الخاصة بهم فقط.
-    """
+    """تصفية سجل السلف حسب الدور والتبعية."""
     user_role = (current_user.get("role") or "employee").strip().lower()
     if user_role in ("general_manager", "chairman", "vice_chairman", "hr"):
         return advances
@@ -466,12 +451,7 @@ def _filter_visible_penalties_rewards(
     employees: List[Dict[str, Any]],
     penalties_rewards: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """
-    تصفية سجل الجزاءات والمكافآت حسب الدور والتبعية:
-    - الموظف: يرى الخاص به فقط.
-    - المدير المباشر والـ Senior: يريان الخاص بالتابعين لهما + الخاص بهما شخصياً.
-    - المدير العام / رئيس مجلس الإدارة / نائب الرئيس / HR: يرون الكل.
-    """
+    """تصفية سجل الجزاءات والمكافآت حسب الدور والتبعية."""
     user_role = (current_user.get("role") or "employee").strip().lower()
     if user_role in ("general_manager", "chairman", "vice_chairman", "hr"):
         return penalties_rewards
@@ -494,7 +474,7 @@ def _filter_visible_penalties_rewards(
 
 
 # =====================================================================
-# تجميع كافة الموافقات المعلقة في مكان واحد (بديل + إجازات + جزاءات/مكافآت + سلف + إضافي)
+# تجميع كافة الموافقات المعلقة في مكان واحد
 # =====================================================================
 def get_pending_items_bundle(
     current_user: Dict[str, Any],
@@ -744,7 +724,7 @@ def render_dashboard(
 
 
 # =====================================================================
-# 2. الشاشة الموحدة الوحيدة للموافقات (بديل + إجازات + جزاءات/مكافآت + سلف + إضافي)
+# 2. الشاشة الموحدة الوحيدة للموافقات
 # =====================================================================
 def render_approvals_inbox(
     current_user: Dict[str, Any],
@@ -1713,7 +1693,7 @@ def render_penalties_rewards_advances(
 
 
 # =====================================================================
-# 5. البصمة والـ Payroll (شيت البصمة للجميع + رفع/إدخال البصمة للـ HR والمدير العام)
+# 5. البصمة والـ Payroll (سحب السماح تلقائياً من org_settings)
 # =====================================================================
 def render_attendance_and_payroll(
     current_user: Dict[str, Any],
@@ -1736,8 +1716,8 @@ def render_attendance_and_payroll(
 
     emp_by_no = {str(e.get("employee_no") or "").strip(): e for e in employees if e.get("employee_no")}
     emp_by_id = {str(e["id"]): e for e in employees if e.get("id")}
-    grace_late = int(org_settings.get("grace_late_minutes") or 15)
-    grace_early = int(org_settings.get("grace_early_minutes") or 5)
+    grace_late = int(org_settings.get("grace_late_minutes") if org_settings.get("grace_late_minutes") is not None else 15)
+    grace_early = int(org_settings.get("grace_early_minutes") if org_settings.get("grace_early_minutes") is not None else 5)
 
     can_upload_att = user_role in ("general_manager", "hr") or perms.get("manage_payroll")
 
@@ -1781,10 +1761,10 @@ def render_attendance_and_payroll(
             leave_txt = my_leave_map.get(d_iso, "")
             has_att = bool(rec.get("check_in") or rec.get("check_out"))
             bd = _compute_attendance_breakdown(rec, current_user, grace_late, grace_early) if has_att else {
-                "late_in": int(rec.get("late_minutes") or 0),
+                "late_in": 0,
                 "early_in": 0,
-                "early_out": int(rec.get("early_leave_minutes") or 0),
-                "overtime_out": int(rec.get("overtime_minutes") or 0),
+                "early_out": 0,
+                "overtime_out": 0,
             }
 
             cin_disp = str(rec.get("check_in") or "")[:5] if rec.get("check_in") else ("ممنوع البصمة — إجازة" if leave_txt else "—")
@@ -1795,8 +1775,8 @@ def render_attendance_and_payroll(
                 "دخول (check_in)": cin_disp,
                 "انصراف (check_out)": cout_disp,
                 "تأخير دخول (دقيقة)": bd["late_in"],
-                "اضافى دخول (دقيقة)": bd["early_in"],
-                " انصراف مبكر (دقيقة)": bd["early_out"],
+                "مبكر دخول (دقيقة)": bd["early_in"],
+                "مبكر انصراف (دقيقة)": bd["early_out"],
                 "إضافي انصراف (دقيقة)": bd["overtime_out"],
             })
 
@@ -1899,6 +1879,7 @@ def render_attendance_and_payroll(
                 st.caption(
                     f"الموظف: **{man_emp.get('name_ar')}** | رقم: `{man_emp.get('employee_no')}` | "
                     f"مواعيد العمل: `{str(man_emp.get('work_start_time') or '09:00')[:5]}` إلى `{str(man_emp.get('work_end_time') or '17:00')[:5]}` | "
+                    f"سماح الدخول: {grace_late} د | سماح الانصراف: {grace_early} د | "
                     f"الفترة: `{man_days[0].isoformat()}` إلى `{man_days[-1].isoformat()}`"
                 )
                 st.info(
@@ -2058,6 +2039,7 @@ def render_attendance_and_payroll(
                 penalties_rewards=penalties_rewards,
                 advances=advances,
                 official_holidays=official_holidays,
+                grace_late_minutes=grace_late,
                 grace_early_minutes=grace_early,
             )
             computed_list.append(res)
