@@ -484,7 +484,7 @@ def _filter_visible_penalties_rewards(
 
 
 # =====================================================================
-# تجميع كافة الموافقات المعلقة في مكان واحد
+# تجميع كافة الموافقات المعلقة في مكان واحد (تطبيق السيكونس الصحيح للوقت الإضافي)
 # =====================================================================
 def get_pending_items_bundle(
     current_user: Dict[str, Any],
@@ -499,7 +499,7 @@ def get_pending_items_bundle(
         return {"leaves": [], "pr": [], "advances": [], "overtime": []}
 
     user_ids = _emp_identifiers(current_user)
-    user_role = (current_user.get("role") or "employee").lower()
+    user_role = (current_user.get("role") or "employee").strip().lower()
     all_emps = employees or []
     emp_by_any_id: Dict[str, Dict[str, Any]] = {}
     for e in all_emps:
@@ -556,15 +556,30 @@ def get_pending_items_bundle(
             elif user_role == "manager" and st_val == "pending" and is_my_subordinate:
                 pending_adv.append(adv)
 
+    # 4. موافقات الوقت الإضافي: سينيور (إن وُجد) -> مدير مباشر -> مدير عام
     pending_ot: List[Dict[str, Any]] = []
-    if perms.get("approve_overtime"):
-        for att in attendance_logs:
-            if int(att.get("overtime_minutes") or 0) <= 0:
-                continue
-            st_ot = (att.get("overtime_status") or "").lower()
-            if user_role == "general_manager" and st_ot in ("pending_manager", "pending_gm"):
+    for att in attendance_logs:
+        if int(att.get("overtime_minutes") or 0) <= 0:
+            continue
+        st_ot = (att.get("overtime_status") or "").strip().lower()
+        if st_ot in ("approved", "rejected", "none", ""):
+            continue
+
+        req_emp_id = str(att.get("employee_id") or "")
+        req_emp_obj = emp_by_any_id.get(req_emp_id, {})
+        req_senior_id = str(req_emp_obj.get("senior_id") or "").strip()
+        req_mgr_id = str(req_emp_obj.get("direct_manager_id") or "").strip()
+
+        if st_ot == "pending_senior":
+            is_my_senior = bool(req_senior_id and req_senior_id in user_ids)
+            if is_my_senior or (user_role == "general_manager" and not req_senior_id):
                 pending_ot.append(att)
-            elif user_role == "manager" and st_ot == "pending_manager":
+        elif st_ot == "pending_manager":
+            is_my_mgr = bool(req_mgr_id and req_mgr_id in user_ids)
+            if is_my_mgr or (user_role == "manager" and not req_mgr_id):
+                pending_ot.append(att)
+        elif st_ot == "pending_gm":
+            if user_role == "general_manager":
                 pending_ot.append(att)
 
     return {
@@ -969,35 +984,83 @@ def render_approvals_inbox(
                         st.rerun()
 
     if bundle["overtime"]:
-        st.markdown("#### 🕒 موافقات الوقت الإضافي")
+        st.markdown("#### 🕒 موافقات الوقت الإضافي (سينيور -> مدير مباشر -> مدير عام)")
         for rec in bundle["overtime"]:
             emp_o = emp_by_id.get(str(rec.get("employee_id") or ""), {})
-            st_ot = (rec.get("overtime_status") or "").lower()
+            st_ot = (rec.get("overtime_status") or "").strip().lower()
+            has_mgr = bool(str(emp_o.get("direct_manager_id") or "").strip())
+
+            stage_label_ar = {
+                "pending_senior": "في انتظار موافقة السينيور",
+                "pending_manager": "في انتظار موافقة المدير المباشر",
+                "pending_gm": "في انتظار اعتماد المدير العام",
+            }.get(st_ot, st_ot)
+
             with st.container(border=True):
                 st.write(
                     f"**{emp_o.get('name_ar', '')}** — التاريخ: `{str(rec.get('work_date'))[:10]}` | "
-                    f"الانصراف: `{rec.get('check_out')}` (نهاية الدوام: `{rec.get('scheduled_end')}`) | "
-                    f"الوقت الإضافي: **`{rec.get('overtime_minutes')} دقيقة`** | الحالة: `{st_ot}`"
+                    f"الانصراف: `{str(rec.get('check_out') or '')[:5]}` (نهاية الدوام: `{str(rec.get('scheduled_end') or '')[:5]}`) | "
+                    f"الوقت الإضافي: **`{rec.get('overtime_minutes')} دقيقة`** | المرحلة: `{stage_label_ar}`"
                 )
-                ca, cr, _ = st.columns([1.4, 1.2, 4.4])
+                ca, cr, _ = st.columns([1.6, 1.2, 4.2])
                 with ca:
-                    if st_ot == "pending_manager" and user_role == "manager":
+                    if st_ot == "pending_senior":
+                        if st.button("✅ موافقة سينيور", key=f"unif_ot_sen_{rec['id']}", type="primary"):
+                            next_ot_st = "pending_manager" if has_mgr else "pending_gm"
+                            update_record("attendance_logs", rec["id"], {
+                                "overtime_status": next_ot_st,
+                                "overtime_senior_by": user_id,
+                            })
+                            write_audit_log(
+                                "attendance_logs",
+                                "ot_senior_approved",
+                                "اعتماد",
+                                f"موافقة السينيور على وقت إضافي ({rec.get('overtime_minutes')} د) للموظف {emp_o.get('name_ar', '')} -> {next_ot_st}",
+                                by_name=current_user.get("name_ar", ""),
+                                by_user_id=user_id,
+                            )
+                            st.rerun()
+                    elif st_ot == "pending_manager":
                         if st.button("✅ موافقة مدير مباشر", key=f"unif_ot_mgr_{rec['id']}", type="primary"):
                             update_record("attendance_logs", rec["id"], {
                                 "overtime_status": "pending_gm",
                                 "overtime_manager_by": user_id,
                             })
+                            write_audit_log(
+                                "attendance_logs",
+                                "ot_manager_approved",
+                                "اعتماد",
+                                f"موافقة المدير المباشر على وقت إضافي ({rec.get('overtime_minutes')} د) للموظف {emp_o.get('name_ar', '')} -> pending_gm",
+                                by_name=current_user.get("name_ar", ""),
+                                by_user_id=user_id,
+                            )
                             st.rerun()
-                    elif user_role == "general_manager":
+                    elif st_ot == "pending_gm" and user_role == "general_manager":
                         if st.button("✅ اعتماد مدير عام", key=f"unif_ot_gm_{rec['id']}", type="primary"):
                             update_record("attendance_logs", rec["id"], {
                                 "overtime_status": "approved",
                                 "overtime_gm_by": user_id,
                             })
+                            write_audit_log(
+                                "attendance_logs",
+                                "ot_gm_approved",
+                                "اعتماد",
+                                f"اعتماد المدير العام النهائي لوقت إضافي ({rec.get('overtime_minutes')} د) للموظف {emp_o.get('name_ar', '')}",
+                                by_name=current_user.get("name_ar", ""),
+                                by_user_id=user_id,
+                            )
                             st.rerun()
                 with cr:
                     if st.button("❌ رفض الإضافي", key=f"unif_ot_rej_{rec['id']}"):
                         update_record("attendance_logs", rec["id"], {"overtime_status": "rejected"})
+                        write_audit_log(
+                            "attendance_logs",
+                            "ot_rejected",
+                            "رفض",
+                            f"رفض وقت إضافي ({rec.get('overtime_minutes')} د) للموظف {emp_o.get('name_ar', '')}",
+                            by_name=current_user.get("name_ar", ""),
+                            by_user_id=user_id,
+                        )
                         st.rerun()
 
 
@@ -1841,6 +1904,7 @@ def render_attendance_and_payroll(
                                 grace_late_minutes=grace_late,
                                 grace_early_minutes=grace_early,
                                 is_leave_day=False,
+                                employee=emp,
                             )
                             upsert_record(
                                 "attendance_logs",
@@ -1973,6 +2037,7 @@ def render_attendance_and_payroll(
                             grace_late_minutes=grace_late,
                             grace_early_minutes=grace_early,
                             is_leave_day=False,
+                            employee=man_emp,
                         )
                         upsert_record(
                             "attendance_logs",
@@ -2052,7 +2117,7 @@ def render_attendance_and_payroll(
         t_idx += 1
 
     with tabs[t_idx]:
-        st.markdown("#### شيت المرتب الشهري الفعلي والأرشيف")
+        st.markdown("#### شيت المرتب الشهري الفعلي والأرشيف (لكل الموظفين بلا استثناء)")
         pay_ym = st.text_input("شهر المرتب (YYYY-MM)", value=date.today().strftime("%Y-%m"), key="pay_sheet_ym")
 
         computed_list = []
@@ -2081,7 +2146,8 @@ def render_attendance_and_payroll(
                     "المرتب الأساسي": r["base_salary"],
                     "إجازات رسمية (+يوم)": r["holiday_bonus"],
                     "المكافآت": r["rewards_total"],
-                    "وقت إضافي معتمد": r["overtime_pay"],
+                    "إضافي معتمد (د)": r["approved_overtime_minutes"],
+                    "وقت إضافي معتمد (ج)": r["overtime_pay"],
                     "خصم السلف": r["advances_deduction"],
                     "خصم الجزاءات": r["penalties_deduction"],
                     "خصم التأخير/الانصراف": r["late_deduction"],
