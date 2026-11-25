@@ -122,7 +122,7 @@ def _compute_attendance_breakdown(
     - تأخير دخول: صافي دقائق التأخير بعد خصم سماح الحضور.
     - إضافي دخول: دقائق الحضور المبكر قبل بداية الدوام.
     - انصراف مبكر: صافي دقائق الانصراف المبكر بعد خصم سماح الانصراف.
-    - إضافة انصراف: دقائق العمل بعد نهاية الدوام.
+    - إضافي الحضور والانصراف: دقائق العمل بعد نهاية الدوام.
     """
     s_start_m = _to_minutes_from_any_time(rec.get("scheduled_start") or emp.get("work_start_time") or "09:00:00")
     if s_start_m is None:
@@ -1797,7 +1797,7 @@ def render_penalties_rewards_advances(
 
 
 # =====================================================================
-# 5. البصمة والـ Payroll (شيت المرتبات للمدير العام و HR ورئيس مجلس الإدارة فقط + إضافة الحضور والانصراف)
+# 5. البصمة والـ Payroll (شيت المرتبات للمدير العام و HR ورئيس مجلس الإدارة فقط + إضافي الحضور والانصراف)
 # =====================================================================
 def render_attendance_and_payroll(
     current_user: Dict[str, Any],
@@ -1901,7 +1901,7 @@ def render_attendance_and_payroll(
                 "تأخير دخول": bd["late_in"],
                 "إضافي دخول": bd["early_in"],
                 "انصراف مبكر": bd["early_out"],
-                "إضافة انصراف": bd["overtime_out"],
+                "إضافي الحضور والانصراف": bd["overtime_out"],
             })
 
         df_my_sheet = pd.DataFrame(sheet_rows)
@@ -1916,7 +1916,7 @@ def render_attendance_and_payroll(
                 bg = ""
             styles = []
             for col_name in row.index:
-                if col_name in ("تأخير دخول", "إضافي دخول", "انصراف مبكر", "إضافة انصراف"):
+                if col_name in ("تأخير دخول", "إضافي دخول", "انصراف مبكر", "إضافي الحضور والانصراف"):
                     styles.append(bg + " text-align: center;")
                 else:
                     styles.append(bg)
@@ -2092,7 +2092,7 @@ def render_attendance_and_payroll(
                         "تأخير دخول": bd["late_in"],
                         "إضافي دخول": bd["early_in"],
                         "انصراف مبكر": bd["early_out"],
-                        "إضافة انصراف": bd["overtime_out"],
+                        "إضافي الحضور والانصراف": bd["overtime_out"],
                     })
 
                 df_man_seed = pd.DataFrame(grid_seed)
@@ -2107,7 +2107,7 @@ def render_attendance_and_payroll(
                         bg = ""
                     styles = []
                     for col_name in row.index:
-                        if col_name in ("دخول", "انصراف", "تأخير دخول", "إضافي دخول", "انصراف مبكر", "إضافة انصراف"):
+                        if col_name in ("دخول", "انصراف", "تأخير دخول", "إضافي دخول", "انصراف مبكر", "إضافي الحضور والانصراف"):
                             styles.append(bg + " text-align: center;")
                         else:
                             styles.append(bg)
@@ -2117,7 +2117,7 @@ def render_attendance_and_payroll(
                     df_man_seed.style.apply(_style_man_grid, axis=1),
                     use_container_width=True,
                     hide_index=True,
-                    disabled=["التاريخ", "الحالة / الإجازة", "تأخير دخول", "إضافي دخول", "انصراف مبكر", "إضافة انصراف"],
+                    disabled=["التاريخ", "الحالة / الإجازة", "تأخير دخول", "إضافي دخول", "انصراف مبكر", "إضافي الحضور والانصراف"],
                     column_config={
                         "التاريخ": st.column_config.TextColumn("التاريخ", width="small"),
                         "الحالة / الإجازة": st.column_config.TextColumn("الحالة / الإجازة", width="medium"),
@@ -2126,7 +2126,7 @@ def render_attendance_and_payroll(
                         "تأخير دخول": st.column_config.NumberColumn("تأخير دخول", width="small"),
                         "إضافي دخول": st.column_config.NumberColumn("إضافي دخول", width="small"),
                         "انصراف مبكر": st.column_config.NumberColumn("انصراف مبكر", width="small"),
-                        "إضافة انصراف": st.column_config.NumberColumn("إضافة انصراف", width="small"),
+                        "إضافي الحضور والانصراف": st.column_config.NumberColumn("إضافي الحضور والانصراف", width="small"),
                     },
                     key=f"manual_att_editor_{man_emp_id}_{man_ym}",
                 )
@@ -2388,7 +2388,7 @@ def render_attendance_and_payroll(
                             <td class="pay-plus">+ {my_res['rewards_total']:,.2f} ج</td>
                         </tr>
                         <tr>
-                            <td>إضافة الحضور والانصراف</td>
+                            <td>إضافي الحضور والانصراف</td>
                             <td class="pay-plus">+ {my_res['overtime_pay']:,.2f} ج</td>
                         </tr>
                         <tr>
@@ -2445,7 +2445,7 @@ def render_attendance_and_payroll(
                         "المرتب الأساسي": r["base_salary"],
                         "إجازات رسمية (+يوم)": r["holiday_bonus"],
                         "المكافآت": r["rewards_total"],
-                        "إضافة الحضور والانصراف": r["overtime_pay"],
+                        "إضافي الحضور والانصراف": r["overtime_pay"],
                         "خصم السلف": r["advances_deduction"],
                         "خصم الجزاءات": r["penalties_deduction"],
                         "خصم التأخير/الانصراف": r["late_deduction"],
@@ -2471,7 +2471,7 @@ def render_attendance_and_payroll(
                     "المرتب الأساسي": tot_base,
                     "إجازات رسمية (+يوم)": tot_hol,
                     "المكافآت": tot_rew,
-                    "إضافة الحضور والانصراف": tot_ot,
+                    "إضافي الحضور والانصراف": tot_ot,
                     "خصم السلف": tot_adv,
                     "خصم الجزاءات": tot_pen,
                     "خصم التأخير/الانصراف": tot_late,
@@ -2484,7 +2484,7 @@ def render_attendance_and_payroll(
                 g1, g2, g3, g4, g5, g6 = st.columns(6)
                 g1.metric("إجمالي المرتبات الأساسية", f"{tot_base:,.2f} ج")
                 g2.metric("إجمالي المكافآت", f"{tot_rew:,.2f} ج")
-                g3.metric("إضافة الحضور والانصراف", f"{tot_ot:,.2f} ج")
+                g3.metric("إضافي الحضور والانصراف", f"{tot_ot:,.2f} ج")
                 g4.metric("إجمالي الخصومات", f"{tot_all_ded:,.2f} ج")
                 g5.metric("إجمالي الجزاءات", f"{tot_pen:,.2f} ج")
                 g6.metric("إجمالي المرتبات الفعلية", f"{tot_net:,.2f} ج")
@@ -2545,7 +2545,7 @@ def render_attendance_and_payroll(
                             "الأساسي": p.get("base_salary"),
                             "إجازات رسمية": p.get("holiday_bonus"),
                             "مكافآت": p.get("rewards_total"),
-                            "إضافة الحضور والانصراف": p.get("overtime_pay"),
+                            "إضافي الحضور والانصراف": p.get("overtime_pay"),
                             "سلف": p.get("advances_deduction"),
                             "جزاءات": p.get("penalties_deduction"),
                             "تأخيرات": p.get("late_deduction"),
