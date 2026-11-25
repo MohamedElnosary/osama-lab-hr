@@ -23,6 +23,23 @@ def _parse_dt_date(val: Any) -> Optional[date]:
     return None
 
 
+def _get_payroll_cycle_bounds(ym_str: str) -> Tuple[date, date]:
+    """إرجاع بداية ونهاية الشهر الإداري (من 21 الشهر السابق إلى 20 الشهر المختار)."""
+    try:
+        yr_s, mo_s = str(ym_str or "").strip()[:7].split("-")
+        yr = int(yr_s)
+        mo = int(mo_s)
+        end_dt = date(yr, mo, 20)
+    except Exception:
+        td = date.today()
+        end_dt = date(td.year, td.month, 20)
+
+    prev_yr = end_dt.year - 1 if end_dt.month == 1 else end_dt.year
+    prev_mo = 12 if end_dt.month == 1 else end_dt.month - 1
+    start_dt = date(prev_yr, prev_mo, 21)
+    return start_dt, end_dt
+
+
 def _parse_time_minutes(val: Any) -> Optional[int]:
     """تحويل وقت (HH:MM أو HH:MM:SS أو time أو datetime) إلى عدد الدقائق من منتصف الليل."""
     if val is None or val == "":
@@ -59,8 +76,8 @@ def evaluate_attendance_record(
 ) -> Dict[str, Any]:
     """
     تقييم سجل البصمة اليومي مع خصم دقائق السماح من الإعدادات:
-    - late_minutes: صافي دقائق التأخير بعد خصم سماح الحضور (مثال: 16 - 15 = 1 دقيقة).
-    - early_leave_minutes: صافي دقائق الانصراف المبكر بعد خصم سماح الانصراف (مثال: 10 - 5 = 5 دقائق).
+    - late_minutes: صافي دقائق التأخير بعد خصم سماح الحضور.
+    - early_leave_minutes: صافي دقائق الانصراف المبكر بعد خصم سماح الانصراف.
     - overtime_minutes: دقائق الوقت الإضافي بعد نهاية الدوام، وتبدأ بحالة pending_manager.
     """
     if is_leave_day:
@@ -239,6 +256,7 @@ def compute_employee_monthly_payroll(
     - ناقص: خصم السلف المستحقة للشهر + الجزاءات المعتمدة + خصم التأخير والانصراف المبكر (بعد خصم السماح).
     """
     ym = str(payroll_month or "").strip()[:7]
+    cycle_start, cycle_end = _get_payroll_cycle_bounds(ym)
     emp_id = str(employee.get("id") or "")
     emp_team_id = str(employee.get("team_user_id") or "")
     emp_ids = {k for k in (emp_id, emp_team_id) if k}
@@ -251,14 +269,29 @@ def compute_employee_monthly_payroll(
         work_hours = 8.0
     minute_rate = (daily_rate / work_hours) / 60.0 if daily_rate > 0 else 0.0
 
+    # 1. الإجازات الرسمية المفعّلة والمضافة للمرتبات ضمن الشهر الإداري أو الشهر المحدد
     active_holidays_in_month = 0
+    seen_holiday_dates = set()
     for hol in official_holidays:
-        if hol.get("active", True) and bool(hol.get("add_day_to_payroll", True)):
-            h_dt = str(hol.get("holiday_date") or "")[:7]
-            if h_dt == ym:
+        is_act = hol.get("active", True)
+        add_flag = hol.get("add_day_to_payroll")
+        if add_flag is None:
+            add_flag = False
+        if not (is_act is not False and bool(add_flag)):
+            continue
+        h_dt_obj = _parse_dt_date(hol.get("holiday_date"))
+        h_raw_str = str(hol.get("holiday_date") or "")[:7]
+        in_cycle = bool(h_dt_obj and (cycle_start <= h_dt_obj <= cycle_end))
+        in_ym = (h_raw_str == ym) or bool(h_dt_obj and h_dt_obj.strftime("%Y-%m") == ym)
+        if in_cycle or in_ym:
+            key_d = h_dt_obj.isoformat() if h_dt_obj else str(hol.get("id") or hol.get("name_ar") or "")
+            if key_d not in seen_holiday_dates:
+                seen_holiday_dates.add(key_d)
                 active_holidays_in_month += 1
+
     holiday_bonus = _round2(daily_rate * active_holidays_in_month)
 
+    # 2. المكافآت والجزاءات المعتمدة للشهر
     rewards_total = 0.0
     penalties_deduction = 0.0
     for pr in penalties_rewards:
@@ -276,6 +309,7 @@ def compute_employee_monthly_payroll(
         elif etype == "penalty":
             penalties_deduction = _round2(penalties_deduction + amt)
 
+    # 3. الوقت الإضافي المعتمد وخصم التأخير والانصراف المبكر من سجلات البصمة
     approved_ot_minutes = 0
     deductible_late_and_early_minutes = 0
     late_grace = max(0, int(grace_late_minutes or 0))
@@ -318,6 +352,7 @@ def compute_employee_monthly_payroll(
     overtime_pay = _round2(approved_ot_minutes * minute_rate)
     late_deduction = _round2(deductible_late_and_early_minutes * minute_rate)
 
+    # 4. السلف المستحقة للشهر
     adv_summ = get_employee_monthly_advances_summary(emp_id, ym, advances)
     advances_deduction = _round2(float(adv_summ.get("total_due") or 0))
 
@@ -337,6 +372,7 @@ def compute_employee_monthly_payroll(
         "name_ar": employee.get("name_ar", ""),
         "job_title": employee.get("job_title", ""),
         "base_salary": base_salary,
+        "holiday_days_count": active_holidays_in_month,
         "holiday_bonus": holiday_bonus,
         "rewards_total": rewards_total,
         "approved_overtime_minutes": approved_ot_minutes,
