@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Any, Dict, List
 import io
 import pandas as pd
@@ -34,10 +34,6 @@ def _dept_map(departments: List[Dict[str, Any]]) -> Dict[str, str]:
     return {str(d["id"]): d.get("name", "") for d in departments if d.get("id")}
 
 
-def _shift_map(shifts: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    return {str(s["id"]): s for s in shifts if s.get("id")}
-
-
 def _emp_identifiers(emp: Dict[str, Any]) -> set:
     ids = set()
     if emp.get("id"):
@@ -45,6 +41,34 @@ def _emp_identifiers(emp: Dict[str, Any]) -> set:
     if emp.get("team_user_id"):
         ids.add(str(emp["team_user_id"]))
     return ids
+
+
+def _calculate_work_hours(start_t: time, end_t: time) -> float:
+    """حساب عدد ساعات العمل تلقائياً بين وقت البداية ووقت النهاية."""
+    start_mins = start_t.hour * 60 + start_t.minute
+    end_mins = end_t.hour * 60 + end_t.minute
+    if end_mins < start_mins:
+        end_mins += 24 * 60
+    diff_mins = end_mins - start_mins
+    return round_half_up_2(diff_mins / 60.0)
+
+
+def _parse_time_safe(val: Any, default_t: time) -> time:
+    if isinstance(val, time):
+        return val
+    if isinstance(val, datetime):
+        return val.time()
+    if isinstance(val, str):
+        txt = val.strip()[:5]
+        try:
+            return datetime.strptime(txt, "%H:%M").time()
+        except ValueError:
+            pass
+        try:
+            return datetime.strptime(val.strip()[:8], "%H:%M:%S").time()
+        except ValueError:
+            pass
+    return default_t
 
 
 def _sync_leave_days_state() -> None:
@@ -212,7 +236,6 @@ def _get_advance_eligible_targets(
     targets: List[Dict[str, Any]] = []
     seen_ids = set()
 
-    # إضافة المستخدم الحالي أولاً
     if current_user.get("id"):
         targets.append(current_user)
         seen_ids.update(my_ids)
@@ -462,13 +485,11 @@ def render_dashboard(
 
     active_emps = [e for e in employees if (e.get("status") or "active") == "active"]
     dept_names = _dept_map(departments)
-    shift_by_id = _shift_map(shifts)
     today = date.today()
     today_iso = today.isoformat()
     current_ym = today.strftime("%Y-%m")
 
     on_leave_today = []
-    on_leave_ids_today = set()
     for lr in leave_requests:
         if (lr.get("status") or "").lower() != "approved":
             continue
@@ -476,8 +497,6 @@ def render_dashboard(
         e_dt = str(lr.get("end_date") or "")[:10]
         if s_dt <= today_iso <= e_dt:
             on_leave_today.append(lr)
-            if lr.get("employee_id"):
-                on_leave_ids_today.add(str(lr["employee_id"]))
 
     total_adv_due = sum(
         get_employee_monthly_advances_summary(str(e["id"]), current_ym, advances)["total_due"]
@@ -513,38 +532,6 @@ def render_dashboard(
 
     st.divider()
 
-    st.markdown("#### 🕒 متابعة الورديات (صباحي / مسائي) وكشف العجز (Drop)")
-    if shifts:
-        shift_rows = []
-        for s in shifts:
-            if not s.get("active", True):
-                continue
-            sid = str(s["id"])
-            did = str(s.get("department_id") or "")
-            assigned_emps = [e for e in active_emps if str(e.get("shift_id") or "") == sid]
-            absent_on_leave = [e for e in assigned_emps if str(e.get("id")) in on_leave_ids_today]
-            present_count = max(0, len(assigned_emps) - len(absent_on_leave))
-            target_cnt = int(s.get("target_headcount") or 100)
-            drop_val = target_cnt - present_count
-            stype_label = (
-                "صباحي"
-                if (s.get("shift_type") == "morning")
-                else ("مسائي" if (s.get("shift_type") == "evening") else "مخصص")
-            )
-            shift_rows.append({
-                "الفرع / القسم": dept_names.get(did, "عام"),
-                "الوردية": s.get("name", ""),
-                "النوع": stype_label,
-                "المستهدف": target_cnt,
-                "المسجلون": len(assigned_emps),
-                "إجازة اليوم": len(absent_on_leave),
-                "المتواجدون فعلياً": present_count,
-                "حالة العجز (Drop)": f"⚠️ عجز {drop_val}" if drop_val > 0 else "✅ مكتمل",
-            })
-        st.dataframe(shift_rows, use_container_width=True, hide_index=True)
-    else:
-        st.info("لم يتم إضافة ورديات بعد. يمكنك إضافة الورديات الصباحية والمسائية من تبويب (الموظفون والفروع والصلاحيات).")
-
     col_left, col_right = st.columns(2)
 
     with col_left:
@@ -553,12 +540,10 @@ def render_dashboard(
             leave_today_table = []
             for lr in on_leave_today:
                 emp_obj = emp_by_id.get(str(lr.get("employee_id") or ""), {})
-                sh_obj = shift_by_id.get(str(emp_obj.get("shift_id") or lr.get("shift_id") or ""), {})
                 leave_today_table.append({
                     "الموظف": lr.get("employee_name") or emp_obj.get("name_ar", ""),
                     "نوع الإجازة": lr.get("type_name") or lr.get("type_code", ""),
                     "الفرع": dept_names.get(str(lr.get("department_id") or emp_obj.get("department_id") or ""), "—"),
-                    "الوردية": sh_obj.get("name") or "—",
                     "إلى تاريخ": str(lr.get("end_date") or "")[:10],
                 })
             st.dataframe(leave_today_table, use_container_width=True, hide_index=True)
@@ -1160,7 +1145,7 @@ def render_leaves_module(
 
 
 # =====================================================================
-# 4. الجزاءات والمكافآت والسلف (مقسّمة على تبويبات واضحة)
+# 4. الجزاءات والمكافآت والسلف
 # =====================================================================
 def render_penalties_rewards_advances(
     current_user: Dict[str, Any],
@@ -1194,7 +1179,6 @@ def render_penalties_rewards_advances(
     tabs = st.tabs(tab_titles)
     t_idx = 0
 
-    # --- 1) إنشاء الجزاءات والمكافآت (للسينيور والمدير المباشر والمدير العام فقط) ---
     if can_create_pr:
         with tabs[t_idx]:
             subordinate_emps = _get_subordinate_employees(current_user, employees)
@@ -1266,7 +1250,6 @@ def render_penalties_rewards_advances(
                         st.rerun()
         t_idx += 1
 
-    # --- 2) تتبع الجزاءات والمكافآت ---
     with tabs[t_idx]:
         st.markdown("#### سجل تتبع الجزاءات والمكافآت")
         visible_pr = _filter_visible_penalties_rewards(current_user, employees, penalties_rewards)
@@ -1313,7 +1296,6 @@ def render_penalties_rewards_advances(
             st.info("لا توجد سجلات جزاءات أو مكافآت ضمن نطاق صلاحياتك حالياً.")
     t_idx += 1
 
-    # --- 3) طلب سلفة (للنفس للجميع + لأي موظف تحت السلطة للمدير المباشر والمدير العام) ---
     with tabs[t_idx]:
         st.markdown("#### تقديم طلب سلفة")
         eligible_targets = _get_advance_eligible_targets(current_user, employees)
@@ -1408,7 +1390,6 @@ def render_penalties_rewards_advances(
                 st.rerun()
     t_idx += 1
 
-    # --- 4) تتبع السلف (المستحق في الشهر + جدول الأقساط المتبقية بالشهور + سجل السلف) ---
     with tabs[t_idx]:
         st.markdown("#### تتبع السلف والأقساط المتبقية")
         track_ym = st.text_input("الشهر المستهدف (YYYY-MM)", value=date.today().strftime("%Y-%m"), key="adv_track_ym")
@@ -1487,7 +1468,6 @@ def render_penalties_rewards_advances(
             st.info("لا توجد طلبات سلف مسجلة ضمن نطاق صلاحياتك حالياً.")
     t_idx += 1
 
-    # --- 5) تجميع وسداد السلف (HR والمدير العام فقط) ---
     if can_view_hr_settle and t_idx < len(tabs):
         with tabs[t_idx]:
             st.markdown("#### تجميع سلف الموظف المستحقة للشهر وتأكيد السداد")
@@ -1573,7 +1553,6 @@ def render_attendance_and_payroll(
 
     emp_by_no = {str(e.get("employee_no") or "").strip(): e for e in employees if e.get("employee_no")}
     emp_by_id = {str(e["id"]): e for e in employees if e.get("id")}
-    shift_by_id = _shift_map(shifts)
     grace_late = int(org_settings.get("grace_late_minutes") or 15)
     grace_early = int(org_settings.get("grace_early_minutes") or 5)
 
@@ -1608,9 +1587,8 @@ def render_attendance_and_payroll(
                     w_dt = parse_date_safe(r.get("work_date"))
                     if not w_dt:
                         continue
-                    sh = shift_by_id.get(str(emp.get("shift_id") or ""))
-                    s_start = (sh or {}).get("start_time") or "09:00:00"
-                    s_end = (sh or {}).get("end_time") or "17:00:00"
+                    s_start = str(emp.get("work_start_time") or "09:00:00")
+                    s_end = str(emp.get("work_end_time") or "17:00:00")
                     cin_str = str(r.get("check_in") or "").strip()
                     cout_str = str(r.get("check_out") or "").strip()
 
@@ -1630,8 +1608,8 @@ def render_attendance_and_payroll(
                             "work_date": w_dt.isoformat(),
                             "check_in": cin_str or None,
                             "check_out": cout_str or None,
-                            "scheduled_start": str(s_start),
-                            "scheduled_end": str(s_end),
+                            "scheduled_start": s_start,
+                            "scheduled_end": s_end,
                             "late_minutes": eval_res["late_minutes"],
                             "early_leave_minutes": eval_res["early_leave_minutes"],
                             "overtime_minutes": eval_res["overtime_minutes"],
@@ -1722,11 +1700,10 @@ def render_attendance_and_payroll(
         for emp in employees:
             if (emp.get("status") or "active") != "active":
                 continue
-            sh = shift_by_id.get(str(emp.get("shift_id") or ""))
             res = compute_employee_monthly_payroll(
                 employee=emp,
                 payroll_month=pay_ym,
-                shift=sh,
+                shift=None,
                 attendance_logs=attendance_logs,
                 penalties_rewards=penalties_rewards,
                 advances=advances,
@@ -2031,7 +2008,7 @@ def render_kpis_and_reports(
 
 
 # =====================================================================
-# 7. الموظفون والفروع والورديات والصلاحيات والإعدادات
+# 7. الموظفون والفروع والصلاحيات والإعدادات
 # =====================================================================
 def render_admin_and_staff(
     current_user: Dict[str, Any],
@@ -2040,7 +2017,7 @@ def render_admin_and_staff(
     shifts: List[Dict[str, Any]],
     org_settings: Dict[str, Any],
 ) -> None:
-    st.markdown("### 👥 إدارة الموظفين والفروع والورديات والصلاحيات والإعدادات")
+    st.markdown("### 👥 إدارة الموظفين والفروع والصلاحيات والإعدادات")
     perms = get_effective_permissions(current_user)
     user_id = str(current_user.get("id"))
     user_role = (current_user.get("role") or "employee").lower()
@@ -2049,19 +2026,29 @@ def render_admin_and_staff(
         st.warning("هذا القسم مخصص للإدارة والموارد البشرية.")
         return
 
-    tab_emp, tab_org_sh, tab_perms = st.tabs([
+    tab_emp, tab_org, tab_perms = st.tabs([
         "👤 الموظفون وتعديل البيانات",
-        "🏢 الفروع والورديات (صباحي/مسائي)",
+        "🏢 الفروع",
         "🔐 الصلاحيات والإعدادات",
     ])
 
     with tab_emp:
         st.markdown("#### إضافة موظف جديد")
         dept_choices = {d.get("name", ""): d["id"] for d in departments}
-        shift_choices = {f"{s.get('name')} ({s.get('shift_type')})": s["id"] for s in shifts}
         emp_ref_choices = {"لا يوجد": None}
         for e in employees:
             emp_ref_choices[f"{e.get('name_ar')} ({e.get('role')})"] = e.get("team_user_id") or e.get("id")
+
+        # وقت العمل وعدد الساعات المحسوبة تلقائياً عند إضافة موظف
+        t_col1, t_col2, t_col3 = st.columns(3)
+        with t_col1:
+            add_w_start = st.time_input("من الساعة", value=time(9, 0), key="add_emp_work_start")
+        with t_col2:
+            add_w_end = st.time_input("إلى الساعة", value=time(17, 0), key="add_emp_work_end")
+        add_hours_val = _calculate_work_hours(add_w_start, add_w_end)
+        add_hours_str = f"{add_hours_val:g} ساعات" if add_hours_val != 1.0 else "ساعة واحدة"
+        with t_col3:
+            st.text_input("عدد ساعات العمل", value=add_hours_str, disabled=True, key=f"add_emp_hours_box_{add_hours_val}")
 
         with st.form("create_emp_form", clear_on_submit=True):
             c1, c2, c3 = st.columns(3)
@@ -2078,7 +2065,6 @@ def render_admin_and_staff(
                 )
             with c3:
                 dept_lbl = st.selectbox("الفرع / القسم", ["—"] + list(dept_choices.keys()))
-                sh_lbl = st.selectbox("الوردية", ["—"] + list(shift_choices.keys()))
                 pin_val = st.text_input("رمز الدخول (PIN)", value="1234")
 
             c4, c5 = st.columns(2)
@@ -2093,7 +2079,9 @@ def render_admin_and_staff(
                         "job_title": job_title.strip(),
                         "role": role_val,
                         "department_id": dept_choices.get(dept_lbl),
-                        "shift_id": shift_choices.get(sh_lbl),
+                        "work_start_time": add_w_start.strftime("%H:%M:%S"),
+                        "work_end_time": add_w_end.strftime("%H:%M:%S"),
+                        "work_hours": float(add_hours_val),
                         "senior_id": emp_ref_choices.get(sen_lbl),
                         "direct_manager_id": emp_ref_choices.get(mgr_lbl),
                         "hire_date": hire_dt.isoformat(),
@@ -2106,28 +2094,40 @@ def render_admin_and_staff(
                         "employees",
                         "create_employee",
                         "إضافة",
-                        f"إضافة الموظف {name_ar.strip()} ({eno.strip()})",
+                        f"إضافة الموظف {name_ar.strip()} ({eno.strip()}) من {add_w_start.strftime('%H:%M')} إلى {add_w_end.strftime('%H:%M')} ({add_hours_val:g} ساعات)",
                         by_name=current_user.get("name_ar", ""),
                         by_user_id=user_id,
                     )
                     st.success("✅ تمت إضافة الموظف بنجاح.")
                     st.rerun()
 
-        st.markdown("#### تعديل بيانات الموظفين (الاسم، المسمى الوظيفي، تاريخ التعيين، المرتب)")
+        st.markdown("#### تعديل بيانات الموظفين (الاسم، المسمى الوظيفي، تاريخ التعيين، المرتب، ومواعيد العمل)")
         if employees:
             edit_map = {f"{e.get('name_ar')} (#{e.get('employee_no')})": e for e in employees}
             sel_edit = st.selectbox("اختر موظفاً للتعديل", list(edit_map.keys()), key="edit_emp_picker")
             target_e = edit_map[sel_edit]
+
+            default_start_t = _parse_time_safe(target_e.get("work_start_time"), time(9, 0))
+            default_end_t = _parse_time_safe(target_e.get("work_end_time"), time(17, 0))
+
+            et_col1, et_col2, et_col3 = st.columns(3)
+            with et_col1:
+                upd_w_start = st.time_input("من الساعة (تعديل)", value=default_start_t, key=f"upd_w_start_{target_e['id']}")
+            with et_col2:
+                upd_w_end = st.time_input("إلى الساعة (تعديل)", value=default_end_t, key=f"upd_w_end_{target_e['id']}")
+            upd_hours_val = _calculate_work_hours(upd_w_start, upd_w_end)
+            with et_col3:
+                st.text_input("عدد ساعات العمل", value=f"{upd_hours_val:g} ساعات", disabled=True, key=f"upd_emp_hours_{target_e['id']}_{upd_hours_val}")
+
             with st.form("edit_emp_form"):
                 ec1, ec2, ec3 = st.columns(3)
                 new_name = ec1.text_input("الاسم", value=target_e.get("name_ar") or "")
                 new_title = ec2.text_input("المسمى الوظيفي", value=target_e.get("job_title") or "")
                 new_hire = ec3.date_input("تاريخ التعيين", value=parse_date_safe(target_e.get("hire_date")) or date.today())
 
-                ec4, ec5, ec6 = st.columns(3)
+                ec4, ec5 = st.columns(2)
                 new_sal = ec4.number_input("المرتب الأساسي", min_value=0.0, value=float(target_e.get("base_salary") or 0), step=250.0)
                 new_status = ec5.selectbox("الحالة", ["active", "inactive"], index=0 if (target_e.get("status") or "active") == "active" else 1)
-                new_sh = ec6.selectbox("الوردية", ["—"] + list(shift_choices.keys()))
 
                 if st.form_submit_button("حفظ التعديلات", type="primary"):
                     upd_payload: Dict[str, Any] = {
@@ -2136,9 +2136,10 @@ def render_admin_and_staff(
                         "hire_date": new_hire.isoformat(),
                         "base_salary": float(new_sal),
                         "status": new_status,
+                        "work_start_time": upd_w_start.strftime("%H:%M:%S"),
+                        "work_end_time": upd_w_end.strftime("%H:%M:%S"),
+                        "work_hours": float(upd_hours_val),
                     }
-                    if new_sh in shift_choices:
-                        upd_payload["shift_id"] = shift_choices[new_sh]
                     update_record("employees", target_e["id"], upd_payload)
                     write_audit_log(
                         "employees",
@@ -2158,7 +2159,12 @@ def render_admin_and_staff(
                     "الاسم": e.get("name_ar"),
                     "المسمى الوظيفي": e.get("job_title"),
                     "الدور": e.get("role"),
-                    "تاريخ التعيين": str(e.get("hire_date") or "")[:10],
+                    "من الساعة": str(e.get("work_start_time") or "09:00")[:5],
+                    "إلى الساعة": str(e.get("work_end_time") or "17:00")[:5],
+                    "ساعات العمل": e.get("work_hours") if e.get("work_hours") is not None else _calculate_work_hours(
+                        _parse_time_safe(e.get("work_start_time"), time(9, 0)),
+                        _parse_time_safe(e.get("work_end_time"), time(17, 0)),
+                    ),
                     "المرتب الأساسي": e.get("base_salary"),
                     "الحالة": e.get("status"),
                 }
@@ -2168,58 +2174,30 @@ def render_admin_and_staff(
             hide_index=True,
         )
 
-    with tab_org_sh:
-        c_d, c_s = st.columns(2)
-        with c_d:
-            st.markdown("#### إضافة فرع / قسم")
-            with st.form("add_dept_form", clear_on_submit=True):
+    with tab_org:
+        st.markdown("#### إضافة فرع / قسم")
+        with st.form("add_dept_form", clear_on_submit=True):
+            dc1, dc2, dc3 = st.columns([1.5, 2.5, 1])
+            with dc1:
                 d_code = st.text_input("كود الفرع", placeholder="مثال: BR-01")
+            with dc2:
                 d_name = st.text_input("اسم الفرع / القسم", placeholder="مثال: فرع إمبابة")
-                if st.form_submit_button("إضافة فرع"):
-                    if d_code.strip() and d_name.strip():
-                        insert_record("departments", {"code": d_code.strip(), "name": d_name.strip(), "active": True})
-                        st.success("✅ تمت إضافة الفرع.")
-                        st.rerun()
-            st.dataframe([{"الكود": d.get("code"), "الاسم": d.get("name")} for d in departments], use_container_width=True, hide_index=True)
+            with dc3:
+                st.write("")
+                st.write("")
+                add_dept_btn = st.form_submit_button("إضافة فرع", type="primary")
 
-        with c_s:
-            st.markdown("#### إضافة وردية (صباحي / مسائي) وسعة الكشف")
-            dept_opt = {d.get("name", ""): d["id"] for d in departments}
-            with st.form("add_shift_form", clear_on_submit=True):
-                s_dept = st.selectbox("الفرع", ["—"] + list(dept_opt.keys()))
-                s_name = st.text_input("اسم الوردية", placeholder="مثال: شفت صباحي / شفت مسائي")
-                s_type = st.selectbox("نوع الشفت", ["morning", "evening", "custom"])
-                sc1, sc2 = st.columns(2)
-                s_start = sc1.time_input("بداية الدوام", value=datetime.strptime("08:00", "%H:%M").time())
-                s_end = sc2.time_input("نهاية الدوام", value=datetime.strptime("16:00", "%H:%M").time())
-                s_target = st.number_input("العدد المستهدف في الشفت", min_value=1, max_value=1000, value=100, step=1)
-                if st.form_submit_button("إضافة وردية"):
-                    if s_name.strip():
-                        insert_record("shifts", {
-                            "department_id": dept_opt.get(s_dept),
-                            "name": s_name.strip(),
-                            "shift_type": s_type,
-                            "start_time": s_start.strftime("%H:%M:%S"),
-                            "end_time": s_end.strftime("%H:%M:%S"),
-                            "target_headcount": int(s_target),
-                            "active": True,
-                        })
-                        st.success("✅ تمت إضافة الوردية.")
-                        st.rerun()
-            st.dataframe(
-                [
-                    {
-                        "الوردية": s.get("name"),
-                        "النوع": s.get("shift_type"),
-                        "من": str(s.get("start_time"))[:5],
-                        "إلى": str(s.get("end_time"))[:5],
-                        "المستهدف": s.get("target_headcount"),
-                    }
-                    for s in shifts
-                ],
-                use_container_width=True,
-                hide_index=True,
-            )
+            if add_dept_btn:
+                if d_code.strip() and d_name.strip():
+                    insert_record("departments", {"code": d_code.strip(), "name": d_name.strip(), "active": True})
+                    st.success("✅ تمت إضافة الفرع.")
+                    st.rerun()
+
+        st.dataframe(
+            [{"الكود": d.get("code"), "الاسم": d.get("name")} for d in departments],
+            use_container_width=True,
+            hide_index=True,
+        )
 
     with tab_perms:
         st.markdown("#### تخصيص صلاحيات مستخدم محدد (بما في ذلك منح المكافآت للـ Senior)")
