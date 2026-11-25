@@ -193,6 +193,40 @@ def _get_subordinate_employees(
     return subordinates
 
 
+def _get_advance_eligible_targets(
+    current_user: Dict[str, Any],
+    employees: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    تحديد الموظفين المسموح بتقديم طلب سلفة لهم:
+    - الموظف العادي أو الـ Senior: نفسه فقط.
+    - المدير المباشر: نفسه + الموظفون التابعون له تحت سلطته.
+    - المدير العام: نفسه + كل الموظفين النشطين.
+    """
+    user_role = (current_user.get("role") or "employee").strip().lower()
+    my_ids = _emp_identifiers(current_user)
+
+    if user_role == "general_manager":
+        return [e for e in employees if (e.get("status") or "active") == "active"]
+
+    targets: List[Dict[str, Any]] = []
+    seen_ids = set()
+
+    # إضافة المستخدم الحالي أولاً
+    if current_user.get("id"):
+        targets.append(current_user)
+        seen_ids.update(my_ids)
+
+    if user_role == "manager":
+        for se in _get_subordinate_employees(current_user, employees):
+            se_ids = _emp_identifiers(se)
+            if not (se_ids & seen_ids):
+                targets.append(se)
+                seen_ids.update(se_ids)
+
+    return targets
+
+
 def _filter_visible_advances(
     current_user: Dict[str, Any],
     employees: List[Dict[str, Any]],
@@ -201,7 +235,7 @@ def _filter_visible_advances(
     """
     تصفية سجل السلف:
     - المدير العام / رئيس مجلس الإدارة / نائب الرئيس / HR: يرون الكل.
-    - المدير المباشر: يرى السلف الخاصة بالموظفين الذين تحت اسمه/سلطته فقط.
+    - المدير المباشر: يرى السلف الخاصة به + السلف الخاصة بالموظفين الذين تحت اسمه/سلطته فقط.
     - باقي الموظفين (بما فيهم الـ Senior): يرون السلف الخاصة بهم فقط.
     """
     user_role = (current_user.get("role") or "employee").strip().lower()
@@ -1126,7 +1160,7 @@ def render_leaves_module(
 
 
 # =====================================================================
-# 4. الجزاءات والمكافآت والسلف
+# 4. الجزاءات والمكافآت والسلف (مقسّمة على تبويبات واضحة)
 # =====================================================================
 def render_penalties_rewards_advances(
     current_user: Dict[str, Any],
@@ -1140,32 +1174,35 @@ def render_penalties_rewards_advances(
     user_role = (current_user.get("role") or "employee").strip().lower()
     emp_by_id = {str(e["id"]): e for e in employees if e.get("id")}
 
+    can_create_pr = (
+        user_role in ("general_manager", "manager", "senior")
+        or perms.get("approve_penalties")
+        or perms.get("approve_rewards")
+    ) and not perms.get("is_monitor_only")
+
     can_view_hr_settle = user_role in ("hr", "general_manager")
 
-    tab_titles = [
-        "⚖️ الجزاءات والمكافآت",
-        "💳 تتبع السلف",
-    ]
+    tab_titles: List[str] = []
+    if can_create_pr:
+        tab_titles.append("➕ إنشاء الجزاءات والمكافآت")
+    tab_titles.append("📊 تتبع الجزاءات والمكافآت")
+    tab_titles.append("💳 طلب سلفة")
+    tab_titles.append("📌 تتبع السلف")
     if can_view_hr_settle:
         tab_titles.append("🏦 تجميع وسداد السلف (HR)")
 
     tabs = st.tabs(tab_titles)
+    t_idx = 0
 
-    with tabs[0]:
-        can_create_pr = (
-            user_role in ("general_manager", "manager", "senior")
-            or perms.get("approve_penalties")
-            or perms.get("approve_rewards")
-        ) and not perms.get("is_monitor_only")
-
-        subordinate_emps = _get_subordinate_employees(current_user, employees)
-        emp_options = {
-            f"{e.get('name_ar')} (#{e.get('employee_no')})": e
-            for e in subordinate_emps
-        }
-
-        if can_create_pr:
-            st.markdown("#### إضافة جزاء أو مكافأة جديدة")
+    # --- 1) إنشاء الجزاءات والمكافآت (للسينيور والمدير المباشر والمدير العام فقط) ---
+    if can_create_pr:
+        with tabs[t_idx]:
+            subordinate_emps = _get_subordinate_employees(current_user, employees)
+            emp_options = {
+                f"{e.get('name_ar')} (#{e.get('employee_no')})": e
+                for e in subordinate_emps
+            }
+            st.markdown("#### إنشاء جزاء أو مكافأة جديدة")
             if not emp_options:
                 st.info("لا يوجد موظفون تابعون تحت سلطتك لإضافة جزاء أو مكافأة لهم.")
             else:
@@ -1227,8 +1264,11 @@ def render_penalties_rewards_advances(
                         )
                         st.success("✅ تم تسجيل الطلب وإرساله إلى صندوق الموافقات الموحّد.")
                         st.rerun()
+        t_idx += 1
 
-        st.markdown("#### سجل الجزاءات والمكافآت")
+    # --- 2) تتبع الجزاءات والمكافآت ---
+    with tabs[t_idx]:
+        st.markdown("#### سجل تتبع الجزاءات والمكافآت")
         visible_pr = _filter_visible_penalties_rewards(current_user, employees, penalties_rewards)
         if visible_pr:
             pr_rows = []
@@ -1271,9 +1311,27 @@ def render_penalties_rewards_advances(
                 st.info("لا توجد سجلات مطابقة للفلاتر المختارة.")
         else:
             st.info("لا توجد سجلات جزاءات أو مكافآت ضمن نطاق صلاحياتك حالياً.")
+    t_idx += 1
 
-    with tabs[1]:
+    # --- 3) طلب سلفة (للنفس للجميع + لأي موظف تحت السلطة للمدير المباشر والمدير العام) ---
+    with tabs[t_idx]:
         st.markdown("#### تقديم طلب سلفة")
+        eligible_targets = _get_advance_eligible_targets(current_user, employees)
+        target_map: Dict[str, Dict[str, Any]] = {}
+        for te in eligible_targets:
+            t_lbl = (
+                f"نفسي — {te.get('name_ar')} (#{te.get('employee_no')})"
+                if str(te.get("id")) == user_id
+                else f"{te.get('name_ar')} (#{te.get('employee_no')})"
+            )
+            target_map[t_lbl] = te
+
+        chosen_adv_target_lbl = st.selectbox(
+            "مقدم السلفة / المستفيد من السلفة",
+            list(target_map.keys()),
+            key="adv_target_emp_sel",
+        )
+        chosen_adv_emp = target_map[chosen_adv_target_lbl]
 
         rep_mode = st.selectbox(
             "نظام السداد",
@@ -1325,7 +1383,7 @@ def render_penalties_rewards_advances(
 
             if st.form_submit_button("إرسال طلب السلفة", type="primary"):
                 insert_record("advances", {
-                    "employee_id": current_user.get("id"),
+                    "employee_id": chosen_adv_emp["id"],
                     "request_date": date.today().isoformat(),
                     "total_amount": float(tot_amt),
                     "repayment_mode": rep_mode,
@@ -1342,47 +1400,96 @@ def render_penalties_rewards_advances(
                     "advances",
                     "create_advance",
                     "إضافة",
-                    f"طلب سلفة بقيمة {tot_amt} ج ({int(sched['installments_count'])} شهر) للموظف {current_user.get('name_ar')}",
+                    f"طلب سلفة بقيمة {tot_amt} ج ({int(sched['installments_count'])} شهر) للموظف {chosen_adv_emp.get('name_ar')}",
                     by_name=current_user.get("name_ar", ""),
                     by_user_id=user_id,
                 )
                 st.success("✅ تم إرسال طلب السلفة إلى صندوق الموافقات الموحّد.")
                 st.rerun()
+    t_idx += 1
 
-        st.divider()
-        st.markdown("#### سلفاتي حسب الشهر المستهدف والأقساط المتبقية")
+    # --- 4) تتبع السلف (المستحق في الشهر + جدول الأقساط المتبقية بالشهور + سجل السلف) ---
+    with tabs[t_idx]:
+        st.markdown("#### تتبع السلف والأقساط المتبقية")
         track_ym = st.text_input("الشهر المستهدف (YYYY-MM)", value=date.today().strftime("%Y-%m"), key="adv_track_ym")
-        my_month_summ = get_employee_monthly_advances_summary(user_id, track_ym, advances)
-        st.metric(f"مستحق السلف لشهر {track_ym}", f"{round_half_up_2(my_month_summ['total_due']):,.2f} ج")
 
-        if my_month_summ["items"]:
+        visible_advances = _filter_visible_advances(current_user, employees, advances)
+        adv_emp_ids_avail = sorted({str(a.get("employee_id") or "") for a in visible_advances if a.get("employee_id")})
+        adv_emp_labels_map: Dict[str, str] = {"سلفاتي الشخصية": user_id}
+        for eid_a in adv_emp_ids_avail:
+            if eid_a == user_id:
+                continue
+            eo = emp_by_id.get(eid_a)
+            if eo:
+                adv_emp_labels_map[f"{eo.get('name_ar')} (#{eo.get('employee_no')})"] = eid_a
+
+        if user_role in ("manager", "general_manager", "hr", "chairman", "vice_chairman") and len(adv_emp_labels_map) > 1:
+            sel_track_emp_lbl = st.selectbox(
+                "اختر الموظف لمتابعة تفاصيل السلف والأقساط المتبقية",
+                list(adv_emp_labels_map.keys()),
+                key="adv_track_emp_sel",
+            )
+            inspected_emp_id = adv_emp_labels_map[sel_track_emp_lbl]
+        else:
+            inspected_emp_id = user_id
+
+        inspected_emp_name = emp_by_id.get(inspected_emp_id, {}).get("name_ar") or current_user.get("name_ar") or ""
+        month_summ = get_employee_monthly_advances_summary(inspected_emp_id, track_ym, advances)
+        st.metric(f"مستحق السلف لشهر {track_ym} ({inspected_emp_name})", f"{round_half_up_2(month_summ['total_due']):,.2f} ج")
+
+        if month_summ["items"]:
             st.dataframe(
                 [
                     {
                         "رقم القسط": f"{sub['installment_no']}/{sub['installments_count']}",
                         "قيمة المستحق في الشهر (ج)": sub["due_amount"],
                     }
-                    for sub in my_month_summ["items"]
+                    for sub in month_summ["items"]
                 ],
                 use_container_width=True,
                 hide_index=True,
             )
         else:
-            st.info(f"لا توجد سلف مستحقة عليك في شهر {track_ym}.")
+            st.info(f"لا توجد سلف مستحقة في شهر {track_ym} للمحدد.")
 
-        rem_info = _build_remaining_schedule_for_employee(user_id, track_ym, advances)
+        rem_info = _build_remaining_schedule_for_employee(inspected_emp_id, track_ym, advances)
         st.markdown("#### السلف المتبقية على مدار الشهور")
         rm1, rm2 = st.columns(2)
-        rm1.metric("إجمالي السلف المتبقية عليك", f"{rem_info['total_remaining']:,.2f} ج")
+        rm1.metric("إجمالي السلف المتبقية", f"{rem_info['total_remaining']:,.2f} ج")
         rm2.metric("تاريخ الانتهاء المتوقع من السلف", rem_info["end_month"])
 
         if rem_info["schedule_rows"]:
             st.dataframe(rem_info["schedule_rows"], use_container_width=True, hide_index=True)
         else:
-            st.success("لا توجد أقساط سلف متبقية عليك.")
+            st.success("لا توجد أقساط سلف متبقية.")
 
-    if can_view_hr_settle and len(tabs) > 2:
-        with tabs[2]:
+        st.divider()
+        st.markdown("#### سجل السلف وحالاتها")
+        if visible_advances:
+            st.dataframe(
+                [
+                    {
+                        "الموظف": emp_by_id.get(str(adv.get("employee_id") or ""), {}).get("name_ar", ""),
+                        "الإجمالي (ج)": adv.get("total_amount"),
+                        "المتبقي (ج)": adv.get("remaining_amount"),
+                        "نظام السداد": "خصم كامل في نفس الشهر" if adv.get("repayment_mode") == "single_month" else "تقسيط على عدد الشهور",
+                        "عدد الشهور": adv.get("installments_count"),
+                        "القسط الشهري": adv.get("monthly_installment"),
+                        "بداية الخصم": adv.get("start_payroll_month"),
+                        "الحالة": adv.get("status"),
+                    }
+                    for adv in visible_advances
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.info("لا توجد طلبات سلف مسجلة ضمن نطاق صلاحياتك حالياً.")
+    t_idx += 1
+
+    # --- 5) تجميع وسداد السلف (HR والمدير العام فقط) ---
+    if can_view_hr_settle and t_idx < len(tabs):
+        with tabs[t_idx]:
             st.markdown("#### تجميع سلف الموظف المستحقة للشهر وتأكيد السداد")
             fc1, fc2 = st.columns(2)
             with fc1:
