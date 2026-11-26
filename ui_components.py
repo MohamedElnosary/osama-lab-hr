@@ -65,20 +65,10 @@ EMPLOYEE_JOB_TITLES: List[str] = [
     "مدير عام",
 ]
 
-KPI_CONFIG_TABS: List[str] = [
-    "استقبال",
-    "استقبال وسحب عينات",
-    "خدمة عملاء",
-    "كيميائيين",
-    "سينيور",
-    "مدير مباشر",
-    "مدير عام",
-]
-
 KPI_SELF_TABS: List[str] = [
     "استقبال",
     "استقبال وسحب عينات",
-    "خدمة عملاء",
+    "كول سنتر",
     "كيميائيين",
     "سينيور",
     "مدير مباشر",
@@ -86,57 +76,57 @@ KPI_SELF_TABS: List[str] = [
 
 DEFAULT_SELF_QUESTIONS_BY_TAB: Dict[str, List[Dict[str, Any]]] = {
     "استقبال": [
-        {"question": "سرعة ودقة استقبال المرضى وتسجيل البيانات", "points": 25.0},
-        {"question": "وضوح شرح التعليمات والنتائج للمراجعين", "points": 25.0},
-        {"question": "الالتزام بالمواعيد والتعليمات الإدارية", "points": 25.0},
-        {"question": "حسن التعامل وحل الشكاوى بهدوء ومهنية", "points": 25.0},
+        {"question": "الالتزام بالمواعيد والحضور المنتظم", "points": 25.0},
+        {"question": "حسن استقبال المراجعين وسرعة تسجيل البيانات", "points": 25.0},
+        {"question": "دقة توجيه المرضى وشرح التعليمات بوضوح", "points": 25.0},
+        {"question": "الالتزام بالتعليمات الإدارية والتعاون مع الفريق", "points": 25.0},
     ],
     "استقبال وسحب عينات": [
-        {"question": "دقة تسجيل العينات وسلامة تطبيق معايير سحبها", "points": 30.0},
-        {"question": "الالتزام بالوقاية والسلامة المهنية أثناء السحب", "points": 25.0},
-        {"question": "السرعة والدقة في التعامل مع ضغط العمل", "points": 25.0},
-        {"question": "الالتزام بالمواعيد والتعاون مع فريق المعمل", "points": 20.0},
+        {"question": "دقة تسجيل العينات وسلامة إجراءات السحب", "points": 30.0},
+        {"question": "الالتزام بقواعد السلامة والوقاية المهنية", "points": 25.0},
+        {"question": "سرعة الأداء والدقة وقت ضغط العمل", "points": 25.0},
+        {"question": "الالتزام بالمواعيد والانضباط الإداري", "points": 20.0},
     ],
-    "خدمة عملاء": [
-        {"question": "سرعة الرد واللباقة في التعامل مع العملاء", "points": 30.0},
-        {"question": "دقة تسجيل الاستفسارات والحجوزات ومتابعتها", "points": 25.0},
+    "كول سنتر": [
+        {"question": "سرعة الرد واللباقة في التواصل مع العملاء", "points": 30.0},
+        {"question": "دقة تسجيل الطلبات والحجوزات ومتابعتها", "points": 25.0},
         {"question": "الالتزام بالمواعيد ونسب الإنجاز اليومية", "points": 25.0},
-        {"question": "الالتزام باللوائح والتعاون الجماعي", "points": 20.0},
+        {"question": "الالتزام بالسياسات والتعاون مع الزملاء", "points": 20.0},
     ],
     "كيميائيين": [
-        {"question": "دقة التحاليل ومراجعة النتائج وفق المعايير الفنية", "points": 30.0},
-        {"question": "الالتزام بجودة التشغيل ومراقبة الجودة (QC)", "points": 25.0},
+        {"question": "دقة إجراء التحاليل ومراجعة النتائج الفنية", "points": 30.0},
+        {"question": "الالتزام بمعايير الجودة ومراقبة التشغيل (QC)", "points": 25.0},
         {"question": "الالتزام بالمواعيد والانضباط داخل المعمل", "points": 25.0},
-        {"question": "التعاون وحل المشكلات الفنية والالتزام بالسياسات", "points": 20.0},
+        {"question": "التعاون وحل المشكلات والالتزام باللوائح", "points": 20.0},
     ],
     "سينيور": [
-        {"question": "دقة التحاليل والمراجعة الفنية النهائية للنتائج", "points": 30.0},
-        {"question": "متابعة سير العمل اليومي وضبط جودة الأداء", "points": 25.0},
-        {"question": "توجيه وتدريب فريق العمل ومتابعة انضباطهم", "points": 25.0},
-        {"question": "الالتزام بالسياسات الإدارية ورفع التقارير بدقة", "points": 20.0},
+        {"question": "ضبط جودة العمل ومراجعة الأداء الفني للفريق", "points": 30.0},
+        {"question": "متابعة الانضباط اليومي وتوجيه الموظفين", "points": 25.0},
+        {"question": "دقة رفع التقارير والالتزام بالمواعيد", "points": 25.0},
+        {"question": "القيادة والمرونة في إدارة ضغط العمل", "points": 20.0},
     ],
     "مدير مباشر": [
-        {"question": "تحقيق مستهدفات الأداء وجودة الخدمات بالفرع", "points": 30.0},
-        {"question": "إدارة وتطوير فريق العمل وتوزيع المهام بكفاءة", "points": 25.0},
-        {"question": "متابعة الحضور والانصراف وسير العمليات اليومية", "points": 25.0},
-        {"question": "الالتزام بالسياسات الإدارية واتخاذ القرارات بفاعلية", "points": 20.0},
+        {"question": "تحقيق أهداف الفرع وجودة الخدمات المقدمة", "points": 30.0},
+        {"question": "إدارة فريق العمل وتوزيع المهام بكفاءة", "points": 25.0},
+        {"question": "متابعة الحضور والانصراف وسير العمل اليومي", "points": 25.0},
+        {"question": "تطبيق اللوائح واتخاذ القرارات بفاعلية", "points": 20.0},
     ],
 }
 
 DEFAULT_PEER_QUESTIONS_BY_TARGET: Dict[str, List[Dict[str, Any]]] = {
     "senior": [
         {"question": "وضوح التوجيه والمتابعة اليومية من السينيور", "points": 40.0},
-        {"question": "سرعة الاستجابة والدعم الفني والإداري عند الحاجة", "points": 30.0},
-        {"question": "العدالة والموضوعية في التعامل مع الفريق", "points": 30.0},
+        {"question": "سرعة الدعم والمساعدة عند الحاجة في العمل", "points": 30.0},
+        {"question": "العدالة والاحترام في التعامل مع الفريق", "points": 30.0},
     ],
     "manager": [
         {"question": "وضوح التعليمات والأهداف من المدير المباشر", "points": 40.0},
-        {"question": "السرعة والفاعلية في حل المشكلات ومتابعة العمل", "points": 30.0},
+        {"question": "السرعة والفاعلية في حل المشكلات وتيسير العمل", "points": 30.0},
         {"question": "العدالة والمهنية في إدارة الفريق وتقييم الأداء", "points": 30.0},
     ],
     "gm": [
         {"question": "وضوح الرؤية والتوجيهات الإدارية للمدير العام", "points": 40.0},
-        {"question": "دعم بيئة العمل وتوفير الموارد اللازمة للأداء", "points": 30.0},
+        {"question": "دعم بيئة العمل وتوفير الإمكانات اللازمة", "points": 30.0},
         {"question": "الشفافية والحزم في تطبيق السياسات واللوائح", "points": 30.0},
     ],
 }
@@ -150,29 +140,30 @@ def _build_simple_pdf_bytes(title_text: str, lines: List[str]) -> bytes:
 
     content_cmds: List[str] = ["BT", "/F1 13 Tf", "40 760 Td", f"({_escape_pdf_str(title_text)}) Tj"]
     y_pos = 736
-    for ln in lines[:42]:
-        if y_pos < 50:
+    for ln in lines[:44]:
+        if y_pos < 45:
             break
         content_cmds.append(f"1 0 0 1 40 {y_pos} Tm")
         content_cmds.append("/F1 10 Tf")
         content_cmds.append(f"({_escape_pdf_str(ln)}) Tj")
-        y_pos -= 16
+        y_pos -= 15
     content_cmds.append("ET")
     stream_data = ("\n".join(content_cmds)).encode("latin-1", errors="replace")
 
-    objs: List[bytes] = []
-    objs.append(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n")
-    objs.append(b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n")
-    objs.append(
-        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
-        b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n"
-    )
-    objs.append(b"4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n")
-    objs.append(
-        f"5 0 obj\n<< /Length {len(stream_data)} >>\nstream\n".encode("latin-1")
-        + stream_data
-        + b"\nendstream\nendobj\n"
-    )
+    objs: List[bytes] = [
+        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
+        (
+            b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n"
+        ),
+        b"4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
+        (
+            f"5 0 obj\n<< /Length {len(stream_data)} >>\nstream\n".encode("latin-1")
+            + stream_data
+            + b"\nendstream\nendobj\n"
+        ),
+    ]
 
     pdf_buf = bytearray(b"%PDF-1.4\n")
     offsets: List[int] = [0]
@@ -270,7 +261,7 @@ def _render_q_editor_block(
     """عرض قائمة الأسئلة مع درجتها وإمكانية الحذف أو إضافة سؤال جديد بدرجته."""
     st.markdown(f"##### {section_title}")
     tot_pts = round_half_up_2(sum(float(x.get("points") or 0) for x in q_list))
-    st.caption(f"عدد الأسئلة: **{len(q_list)}** | إجمالي الدرجات: **{tot_pts:g}**")
+    st.caption(f"عدد الأسئلة: **{len(q_list)}** | إجمالي درجات الأسئلة: **{tot_pts:g}**")
 
     if q_list:
         for idx_q, item in enumerate(q_list):
@@ -317,7 +308,7 @@ def _map_job_title_to_self_tab(emp: Dict[str, Any]) -> str:
     if "كيميائي" in jt or "كيميائ" in jt:
         return "كيميائيين"
     if "خدمة عملاء" in jt or "كول" in jt:
-        return "خدمة عملاء"
+        return "كول سنتر"
     if "سحب" in jt:
         return "استقبال وسحب عينات"
     if "استقبال" in jt:
@@ -325,7 +316,7 @@ def _map_job_title_to_self_tab(emp: Dict[str, Any]) -> str:
     return "استقبال"
 
 
-def _compute_kpi_period_metrics(
+def _build_full_employee_kpi_report_data(
     emp: Dict[str, Any],
     start_date: date,
     end_date: date,
@@ -334,77 +325,15 @@ def _compute_kpi_period_metrics(
     penalties_rewards: List[Dict[str, Any]],
     advances: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    """حساب ملخص الآلي لأداء الفترة: أيام الإجازات، مرات التأخير، إضافي معتمد (أيام)، المكافآت (عدد المرات)، الجزاءات (عدد المرات)، السلف."""
-    base_sum = build_employee_period_summary(
-        employee=emp,
-        start_date=start_date,
-        end_date=end_date,
-        leave_requests=leave_requests,
-        attendance_logs=attendance_logs,
-        penalties_rewards=penalties_rewards,
-        advances=advances,
-    )
-    emp_ids = _emp_identifiers(emp)
-
-    approved_ot_days = 0
-    seen_ot_days = set()
-    for att in attendance_logs:
-        if str(att.get("employee_id") or "") not in emp_ids:
-            continue
-        w_dt = parse_date_safe(att.get("work_date"))
-        if not w_dt or not (start_date <= w_dt <= end_date):
-            continue
-        ot_m = int(att.get("overtime_minutes") or 0)
-        ot_s = str(att.get("overtime_status") or "").strip().lower()
-        if ot_m > 0 and ot_s == "approved":
-            d_key = w_dt.isoformat()
-            if d_key not in seen_ot_days:
-                seen_ot_days.add(d_key)
-                approved_ot_days += 1
-
-    rewards_count = 0
-    penalties_count = 0
-    for pr in penalties_rewards:
-        if str(pr.get("employee_id") or "") not in emp_ids:
-            continue
-        if str(pr.get("status") or "").strip().lower() != "approved":
-            continue
-        i_dt = parse_date_safe(pr.get("issue_date"))
-        if not i_dt or not (start_date <= i_dt <= end_date):
-            continue
-        etype = str(pr.get("entry_type") or "").strip().lower()
-        if etype == "reward":
-            rewards_count += 1
-        elif etype == "penalty":
-            penalties_count += 1
-
-    return {
-        "approved_leaves_days": base_sum["approved_leaves_days"],
-        "late_days_count": base_sum["late_days_count"],
-        "approved_ot_days": approved_ot_days,
-        "rewards_count": rewards_count,
-        "penalties_count": penalties_count,
-        "total_advances": base_sum["total_advances"],
-    }
-
-
-def _build_detailed_employee_kpi_breakdown(
-    emp: Dict[str, Any],
-    start_date: date,
-    end_date: date,
-    leave_requests: List[Dict[str, Any]],
-    attendance_logs: List[Dict[str, Any]],
-    penalties_rewards: List[Dict[str, Any]],
-    advances: List[Dict[str, Any]],
-) -> Dict[str, Any]:
-    """تجميع التفاصيل الشهرية والشاملة للإجازات (عارضة/اعتيادي/بالأشهر)، الجزاءات، المكافآت، السلف، والإضافي."""
+    """تجميع التفاصيل الكاملة لفترة التقييم للموظف: الإجازات، المكافآت، الجزاءات، السلف، الإضافي، والتأخيرات بالشهور."""
     emp_ids = _emp_identifiers(emp)
     emp_id_primary = str(emp.get("id") or "")
 
+    # 1. الإجازات
     casual_days = 0.0
     regular_days = 0.0
     other_leave_days = 0.0
-    leave_items: List[Dict[str, Any]] = []
+    leave_details: List[Dict[str, Any]] = []
     leaves_by_month: Dict[str, float] = {}
 
     for lr in leave_requests:
@@ -416,9 +345,7 @@ def _build_detailed_employee_kpi_breakdown(
             continue
         s_dt = parse_date_safe(lr.get("start_date"))
         e_dt = parse_date_safe(lr.get("end_date")) or s_dt
-        if not s_dt:
-            continue
-        if s_dt < start_date or s_dt > end_date:
+        if not s_dt or not (start_date <= s_dt <= end_date):
             continue
 
         d_val = float(lr.get("days") or 0)
@@ -435,93 +362,154 @@ def _build_detailed_employee_kpi_breakdown(
 
         ym_k = s_dt.strftime("%Y-%m")
         leaves_by_month[ym_k] = round_half_up_2(leaves_by_month.get(ym_k, 0.0) + d_val)
-        leave_items.append({
+        leave_details.append({
             "نوع الإجازة": t_name,
             "الشهر": ym_k,
             "من": s_dt.isoformat(),
             "إلى": (e_dt or s_dt).isoformat(),
             "الأيام": d_val,
+            "السبب": lr.get("reason") or "—",
         })
 
-    penalties_by_month: Dict[str, int] = {}
-    penalties_total_cnt = 0
-    for pr in penalties_rewards:
-        if str(pr.get("employee_id") or "") not in emp_ids:
-            continue
-        if str(pr.get("status") or "").strip().lower() != "approved":
-            continue
-        if str(pr.get("entry_type") or "").strip().lower() != "penalty":
-            continue
-        i_dt = parse_date_safe(pr.get("issue_date"))
-        if i_dt and (start_date <= i_dt <= end_date):
-            ym_p = str(pr.get("payroll_month") or i_dt.strftime("%Y-%m"))[:7]
-            penalties_by_month[ym_p] = penalties_by_month.get(ym_p, 0) + 1
-            penalties_total_cnt += 1
-
+    # 2. المكافآت والجزاءات
+    rewards_list: List[Dict[str, Any]] = []
+    penalties_list: List[Dict[str, Any]] = []
     rewards_by_month: Dict[str, int] = {}
-    rewards_total_cnt = 0
+    penalties_by_month: Dict[str, int] = {}
+
     for pr in penalties_rewards:
         if str(pr.get("employee_id") or "") not in emp_ids:
             continue
         if str(pr.get("status") or "").strip().lower() != "approved":
             continue
-        if str(pr.get("entry_type") or "").strip().lower() != "reward":
-            continue
         i_dt = parse_date_safe(pr.get("issue_date"))
-        if i_dt and (start_date <= i_dt <= end_date):
-            ym_r = str(pr.get("payroll_month") or i_dt.strftime("%Y-%m"))[:7]
-            rewards_by_month[ym_r] = rewards_by_month.get(ym_r, 0) + 1
-            rewards_total_cnt += 1
+        if not i_dt or not (start_date <= i_dt <= end_date):
+            continue
+        ym_p = str(pr.get("payroll_month") or i_dt.strftime("%Y-%m"))[:7]
+        etype = str(pr.get("entry_type") or "").strip().lower()
+        amt_p = round_half_up_2(float(pr.get("calculated_amount") or 0))
+        if etype == "reward":
+            rewards_by_month[ym_p] = rewards_by_month.get(ym_p, 0) + 1
+            rewards_list.append({
+                "الشهر": ym_p,
+                "التاريخ": i_dt.isoformat(),
+                "القيمة (ج)": amt_p,
+                "السبب": pr.get("reason") or pr.get("title") or "—",
+            })
+        elif etype == "penalty":
+            penalties_by_month[ym_p] = penalties_by_month.get(ym_p, 0) + 1
+            penalties_list.append({
+                "الشهر": ym_p,
+                "التاريخ": i_dt.isoformat(),
+                "القيمة (ج)": amt_p,
+                "السبب": pr.get("reason") or pr.get("title") or "—",
+            })
 
+    # 3. السلف
+    advances_list: List[Dict[str, Any]] = []
     advances_by_month: Dict[str, float] = {}
     advances_total_amt = 0.0
+
     for adv in advances:
         if str(adv.get("employee_id") or "") != emp_id_primary and str(adv.get("employee_id") or "") not in emp_ids:
             continue
         if str(adv.get("status") or "").strip().lower() in ("rejected", "cancelled"):
             continue
         r_dt = parse_date_safe(adv.get("request_date"))
-        if r_dt and (start_date <= r_dt <= end_date):
-            amt_a = round_half_up_2(float(adv.get("total_amount") or 0))
-            ym_a = str(adv.get("start_payroll_month") or r_dt.strftime("%Y-%m"))[:7]
-            advances_by_month[ym_a] = round_half_up_2(advances_by_month.get(ym_a, 0.0) + amt_a)
-            advances_total_amt = round_half_up_2(advances_total_amt + amt_a)
+        if not r_dt or not (start_date <= r_dt <= end_date):
+            continue
+        amt_a = round_half_up_2(float(adv.get("total_amount") or 0))
+        ym_a = str(adv.get("start_payroll_month") or r_dt.strftime("%Y-%m"))[:7]
+        advances_by_month[ym_a] = round_half_up_2(advances_by_month.get(ym_a, 0.0) + amt_a)
+        advances_total_amt = round_half_up_2(advances_total_amt + amt_a)
+        advances_list.append({
+            "الشهر": ym_a,
+            "التاريخ": r_dt.isoformat(),
+            "الإجمالي (ج)": amt_a,
+            "المتبقي (ج)": round_half_up_2(float(adv.get("remaining_amount") or 0)),
+            "السبب": adv.get("reason") or "—",
+        })
 
-    ot_mins_by_month: Dict[str, int] = {}
+    # 4. الإضافي والتأخيرات
+    ot_list: List[Dict[str, Any]] = []
+    late_list: List[Dict[str, Any]] = []
     ot_days_by_month: Dict[str, set] = {}
-    total_ot_mins = 0
+    ot_mins_by_month: Dict[str, int] = {}
+    late_cnt_by_month: Dict[str, int] = {}
     all_ot_days = set()
+    total_ot_mins = 0
+    total_late_cnt = 0
+
     for att in attendance_logs:
         if str(att.get("employee_id") or "") not in emp_ids:
             continue
         w_dt = parse_date_safe(att.get("work_date"))
         if not w_dt or not (start_date <= w_dt <= end_date):
             continue
+        ym_w = w_dt.strftime("%Y-%m")
+
         ot_m = int(att.get("overtime_minutes") or 0)
         if ot_m > 0 and str(att.get("overtime_status") or "").strip().lower() == "approved":
-            ym_o = w_dt.strftime("%Y-%m")
-            ot_mins_by_month[ym_o] = ot_mins_by_month.get(ym_o, 0) + ot_m
-            ot_days_by_month.setdefault(ym_o, set()).add(w_dt.isoformat())
-            total_ot_mins += ot_m
             all_ot_days.add(w_dt.isoformat())
+            total_ot_mins += ot_m
+            ot_mins_by_month[ym_w] = ot_mins_by_month.get(ym_w, 0) + ot_m
+            ot_days_by_month.setdefault(ym_w, set()).add(w_dt.isoformat())
+            ot_list.append({
+                "الشهر": ym_w,
+                "التاريخ": w_dt.isoformat(),
+                "الوقت الإضافي (دقيقة)": ot_m,
+            })
+
+        lm = int(att.get("late_minutes") or 0)
+        if lm > 0:
+            total_late_cnt += 1
+            late_cnt_by_month[ym_w] = late_cnt_by_month.get(ym_w, 0) + 1
+            late_list.append({
+                "الشهر": ym_w,
+                "التاريخ": w_dt.isoformat(),
+                "تأخير (دقيقة)": lm,
+            })
+
+    months_sorted = sorted(
+        set(leaves_by_month.keys())
+        | set(rewards_by_month.keys())
+        | set(penalties_by_month.keys())
+        | set(advances_by_month.keys())
+        | set(ot_days_by_month.keys())
+        | set(late_cnt_by_month.keys())
+    )
+
+    monthly_summary_rows = [
+        {
+            "الشهر": ym_i,
+            "الإجازات (يوم)": leaves_by_month.get(ym_i, 0.0),
+            "المكافآت (عدد)": rewards_by_month.get(ym_i, 0),
+            "الجزاءات (عدد)": penalties_by_month.get(ym_i, 0),
+            "السلف (ج)": advances_by_month.get(ym_i, 0.0),
+            "الإضافي (أيام / دقيقة)": f"{len(ot_days_by_month.get(ym_i, set()))} يوم / {ot_mins_by_month.get(ym_i, 0)} د",
+            "التأخيرات (مرات)": late_cnt_by_month.get(ym_i, 0),
+        }
+        for ym_i in months_sorted
+    ]
 
     return {
         "casual_days": casual_days,
         "regular_days": regular_days,
         "other_leave_days": other_leave_days,
         "total_leave_days": round_half_up_2(casual_days + regular_days + other_leave_days),
-        "leave_items": leave_items,
-        "leaves_by_month": dict(sorted(leaves_by_month.items())),
-        "penalties_total_cnt": penalties_total_cnt,
-        "penalties_by_month": dict(sorted(penalties_by_month.items())),
-        "rewards_total_cnt": rewards_total_cnt,
-        "rewards_by_month": dict(sorted(rewards_by_month.items())),
+        "leave_details": leave_details,
+        "rewards_list": rewards_list,
+        "rewards_count": len(rewards_list),
+        "penalties_list": penalties_list,
+        "penalties_count": len(penalties_list),
+        "advances_list": advances_list,
         "advances_total_amt": advances_total_amt,
-        "advances_by_month": dict(sorted(advances_by_month.items())),
-        "total_ot_mins": total_ot_mins,
+        "ot_list": ot_list,
         "total_ot_days": len(all_ot_days),
-        "ot_mins_by_month": dict(sorted(ot_mins_by_month.items())),
-        "ot_days_by_month": {k: len(v) for k, v in sorted(ot_days_by_month.items())},
+        "total_ot_mins": total_ot_mins,
+        "late_list": late_list,
+        "total_late_cnt": total_late_cnt,
+        "monthly_summary_rows": monthly_summary_rows,
     }
 
 
@@ -3048,7 +3036,7 @@ def render_reports_module(
 
 
 # =====================================================================
-# 7. شاشة الـ KPIs
+# 7. شاشة الـ KPIs (نظام واضح ومنضبط ومناسب لجميع المستويات الوظيفية)
 # =====================================================================
 def render_kpis_module(
     current_user: Dict[str, Any],
@@ -3080,24 +3068,22 @@ def render_kpis_module(
         return
 
     st.caption(
-        f"نوع التقييم: **{eval_cycle_type}** | بداية التقييم: **`{kpi_start_dt.isoformat()}`** | "
-        f"نهاية التقييم: **`{kpi_end_dt.isoformat()}`**"
+        f"فترة التقييم: **{eval_cycle_type}** | من **`{kpi_start_dt.isoformat()}`** إلى **`{kpi_end_dt.isoformat()}`**"
     )
 
     self_q_by_tab = _get_all_self_questions(eff_org)
     peer_q_by_target = _get_all_peer_questions(eff_org)
 
-    # --- حالة المدير العام: تبويب تقييم الموظفين + تبويبات التقارير الأربعة ---
+    # --- المدير العام: تقييم الموظفين + التقارير الأربعة ---
     if user_role == "general_manager":
         gm_tabs = st.tabs([
             "👥 تقييم الموظفين",
-            "📄 تقرير تقييم الموظف",
-            "👨‍🔬 تقرير تقييم السينيور",
-            "👔 تقرير تقييم المدير المباشر",
-            "🏢 تقرير تقييم المدير العام",
+            "📄 تقرير الموظف",
+            "👨‍🔬 تقرير السينيور",
+            "👔 تقرير المدير المباشر",
+            "🏢 تقرير المدير العام",
         ])
 
-        # 1) تقييم الموظفين للمدير العام (اختيار الاسم فقط -> تحديد الأسئلة تلقائياً حسب فئته)
         with gm_tabs[0]:
             st.markdown("#### تقييم الموظفين")
             rateable_emps = [
@@ -3112,7 +3098,7 @@ def render_kpis_module(
                 sel_remp_lbl = st.selectbox("اختر الموظف", list(remp_map.keys()), key="gm_rate_emp_sel")
                 picked_remp = remp_map[sel_remp_lbl]
                 remp_tab_cat = _map_job_title_to_self_tab(picked_remp)
-                st.caption(f"الموظف: **{picked_remp.get('name_ar')}** — الفئة المرتبطة: **`{remp_tab_cat}`**")
+                st.caption(f"الموظف: **{picked_remp.get('name_ar')}** — الفئة: **`{remp_tab_cat}`**")
 
                 rq_items = self_q_by_tab.get(remp_tab_cat) or []
                 max_r_pts = round_half_up_2(sum(float(item.get("points") or 0) for item in rq_items))
@@ -3123,7 +3109,7 @@ def render_kpis_module(
                     pts_rq = max(0.5, float(item_rq.get("points") or 10.0))
                     r_scores_map[q_rq] = float(
                         st.slider(
-                            f"{q_rq} (الدرجة القصوى: {pts_rq:g})",
+                            f"{q_rq} (الحد الأقصى: {pts_rq:g})",
                             min_value=0.0,
                             max_value=float(pts_rq),
                             value=float(min(pts_rq, round_half_up_2(pts_rq * 0.8))),
@@ -3156,9 +3142,9 @@ def render_kpis_module(
                     st.success(f"✅ تم حفظ تقييم الموظف {picked_remp.get('name_ar')} بنجاح.")
                     st.rerun()
 
-        # 2) تقرير تقييم الموظف (البنود + تقييم الموظف لنفسه + تقييم المدير المباشر + الإجمالي + تفاصيل الفترة + PDF)
+        # تقرير الموظف: البنود + تقييم الموظف لنفسه + تقييم المدير المباشر + الإجمالي + تفاصيل الفترة + طباعة / PDF
         with gm_tabs[1]:
-            st.markdown("#### تقرير تقييم الموظف")
+            st.markdown("#### تقرير الموظف")
             report_emps = [
                 e for e in employees
                 if (e.get("status") or "active") == "active"
@@ -3224,7 +3210,7 @@ def render_kpis_module(
                 st.markdown(f"### الاسم: {target_rep_emp.get('name_ar')}")
                 st.dataframe(rows_data + [total_row], use_container_width=True, hide_index=True)
 
-                det = _build_detailed_employee_kpi_breakdown(
+                det = _build_full_employee_kpi_report_data(
                     emp=target_rep_emp,
                     start_date=kpi_start_dt,
                     end_date=kpi_end_dt,
@@ -3235,46 +3221,39 @@ def render_kpis_module(
                 )
 
                 st.divider()
-                st.markdown("#### 📌 تفصيل الإجازات والجزاءات والمكافآت والسلف والإضافي خلال فترة التقييم")
+                st.markdown("#### 📌 السجل التفصيلي للفترة (الإجازات، المكافآت، الجزاءات، السلف، الإضافي، التأخيرات)")
 
-                l_m1, l_m2, l_m3, l_m4 = st.columns(4)
-                l_m1.metric("إجمالي أيام الإجازات", det["total_leave_days"])
-                l_m2.metric("العارضة (أيام)", det["casual_days"])
-                l_m3.metric("الاعتيادي (أيام)", det["regular_days"])
-                l_m4.metric("أيام إضافي معتمد", det["total_ot_days"])
+                m_top1, m_top2, m_top3, m_top4, m_top5 = st.columns(5)
+                m_top1.metric("الإجازات (أيام)", det["total_leave_days"])
+                m_top2.metric("المكافآت (مرات)", det["rewards_count"])
+                m_top3.metric("الجزاءات (مرات)", det["penalties_count"])
+                m_top4.metric("السلف (ج)", f"{det['advances_total_amt']:,.2f}")
+                m_top5.metric("الإضافي / التأخيرات", f"{det['total_ot_days']} ي / {det['total_late_cnt']} ت")
 
-                if det["leave_items"]:
-                    st.markdown("**تفصيل كل إجازة:**")
-                    st.dataframe(det["leave_items"], use_container_width=True, hide_index=True)
+                st.caption(f"تفصيل الإجازات: عارضة (**{det['casual_days']}** يوم) — اعتيادي (**{det['regular_days']}** يوم)")
 
-                all_months_seen = sorted(
-                    set(det["leaves_by_month"].keys())
-                    | set(det["penalties_by_month"].keys())
-                    | set(det["rewards_by_month"].keys())
-                    | set(det["advances_by_month"].keys())
-                    | set(det["ot_days_by_month"].keys())
-                )
-                if all_months_seen:
-                    st.markdown("**التوزيع الشهري خلال فترة التقييم:**")
-                    monthly_breakdown_rows = [
-                        {
-                            "الشهر": ym_k,
-                            "إجازات (يوم)": det["leaves_by_month"].get(ym_k, 0.0),
-                            "جزاءات (عدد)": det["penalties_by_month"].get(ym_k, 0),
-                            "مكافآت (عدد)": det["rewards_by_month"].get(ym_k, 0),
-                            "سلف (ج)": det["advances_by_month"].get(ym_k, 0.0),
-                            "إضافي (أيام / دقيقة)": f"{det['ot_days_by_month'].get(ym_k, 0)} يوم / {det['ot_mins_by_month'].get(ym_k, 0)} د",
-                        }
-                        for ym_k in all_months_seen
-                    ]
-                    st.dataframe(monthly_breakdown_rows, use_container_width=True, hide_index=True)
+                if det["monthly_summary_rows"]:
+                    st.markdown("**التوزيع بالشهور خلال فترة التقييم:**")
+                    st.dataframe(det["monthly_summary_rows"], use_container_width=True, hide_index=True)
 
-                st.caption(
-                    f"إجمالي الجزاءات: **{det['penalties_total_cnt']}** | "
-                    f"إجمالي المكافآت: **{det['rewards_total_cnt']}** | "
-                    f"إجمالي السلف: **{det['advances_total_amt']:,.2f} ج** | "
-                    f"إجمالي الإضافي: **{det['total_ot_days']} يوم ({det['total_ot_mins']} دقيقة)**"
-                )
+                if det["leave_details"]:
+                    st.markdown("**تفصيل الإجازات:**")
+                    st.dataframe(det["leave_details"], use_container_width=True, hide_index=True)
+                if det["rewards_list"]:
+                    st.markdown("**تفصيل المكافآت:**")
+                    st.dataframe(det["rewards_list"], use_container_width=True, hide_index=True)
+                if det["penalties_list"]:
+                    st.markdown("**تفصيل الجزاءات:**")
+                    st.dataframe(det["penalties_list"], use_container_width=True, hide_index=True)
+                if det["advances_list"]:
+                    st.markdown("**تفصيل السلف:**")
+                    st.dataframe(det["advances_list"], use_container_width=True, hide_index=True)
+                if det["ot_list"]:
+                    st.markdown("**تفصيل الوقت الإضافي:**")
+                    st.dataframe(det["ot_list"], use_container_width=True, hide_index=True)
+                if det["late_list"]:
+                    st.markdown("**تفصيل التأخيرات:**")
+                    st.dataframe(det["late_list"], use_container_width=True, hide_index=True)
 
                 t_hdr_html = "".join(f"<th>{c_k}</th>" for c_k in total_row.keys())
                 t_bdy_html = "".join(
@@ -3317,11 +3296,11 @@ def render_kpis_module(
                         f"Period: {kpi_start_dt.isoformat()} to {kpi_end_dt.isoformat()}",
                         f"Self Total: {tot_self_val:g} | Direct Manager Total: {tot_mgr_val:g}",
                         f"Leaves: {det['total_leave_days']} (Casual: {det['casual_days']}, Regular: {det['regular_days']})",
-                        f"Penalties Count: {det['penalties_total_cnt']} | Rewards Count: {det['rewards_total_cnt']}",
-                        f"Advances Total: {det['advances_total_amt']:g} | Overtime Days: {det['total_ot_days']}",
+                        f"Rewards: {det['rewards_count']} | Penalties: {det['penalties_count']} | Advances: {det['advances_total_amt']:g}",
+                        f"Overtime Days: {det['total_ot_days']} | Late Count: {det['total_late_cnt']}",
                     ]
                     for idx_c, r_c in enumerate(rows_data, start=1):
-                        pdf_lines.append(f"Item {idx_c}: Self={r_c['تقييم الموظف لنفسه']} | DirectMgr={r_c['تقييم المدير المباشر']}")
+                        pdf_lines.append(f"Item {idx_c}: Self={r_c['تقييم الموظف لنفسه']} | Mgr={r_c['تقييم المدير المباشر']}")
                     pdf_bytes = _build_simple_pdf_bytes(f"Employee KPI - {target_rep_emp.get('employee_no', '')}", pdf_lines)
                     st.download_button(
                         "📄 تصدير PDF",
@@ -3331,9 +3310,9 @@ def render_kpis_module(
                         key=f"dl_kpi_pdf_{target_rep_emp['id']}",
                     )
 
-        # 3) تقرير تقييم السينيور (فلتر بأسماء السينيور + موظف 1، موظف 2... + إجمالي كل موظف + الإجمالي الكلي)
+        # تقرير السينيور: فلتر بأسماء السينيور + موظف 1، موظف 2... + إجمالي كل موظف + الإجمالي الكلي
         with gm_tabs[2]:
-            st.markdown("#### تقرير تقييم السينيور")
+            st.markdown("#### تقرير السينيور")
             seniors_only = [
                 e for e in employees
                 if (e.get("status") or "active") == "active"
@@ -3396,9 +3375,9 @@ def render_kpis_module(
                     s_hdr_h = "".join(f"<th>{ck}</th>" for ck in sen_matrix[0].keys())
                     s_bdy_h = "".join("<tr>" + "".join(f"<td>{ro[ck]}</td>" for ck in sen_matrix[0].keys()) + "</tr>" for ro in sen_matrix)
                     s_doc_j = json.dumps(
-                        f"<!DOCTYPE html><html dir='rtl' lang='ar'><head><meta charset='utf-8'><title>تقرير تقييم السينيور</title>"
+                        f"<!DOCTYPE html><html dir='rtl' lang='ar'><head><meta charset='utf-8'><title>تقرير السينيور</title>"
                         "<style>body{font-family:'Cairo',Tahoma,sans-serif;direction:rtl;margin:28px;}table{width:100%;border-collapse:collapse;}th,td{border:1px solid #334155;padding:10px;text-align:center;}th{background:#f1f5f9;}</style>"
-                        f"</head><body><h3>تقرير تقييم السينيور: {picked_sen_obj.get('name_ar')} | الإجمالي الكلي: {grand_tot_s:g}</h3><table><thead><tr>{s_hdr_h}</tr></thead><tbody>{s_bdy_h}</tbody></table></body></html>"
+                        f"</head><body><h3>تقرير السينيور: {picked_sen_obj.get('name_ar')} | الإجمالي الكلي: {grand_tot_s:g}</h3><table><thead><tr>{s_hdr_h}</tr></thead><tbody>{s_bdy_h}</tbody></table></body></html>"
                     )
                     sc_1, sc_2 = st.columns([1.5, 1.5])
                     with sc_1:
@@ -3410,9 +3389,9 @@ def render_kpis_module(
                         s_pdf_b = _build_simple_pdf_bytes("Senior KPI Report", [f"Senior: {picked_sen_obj.get('employee_no', '')}", f"Grand Total: {grand_tot_s:g}"])
                         st.download_button("📄 تصدير PDF", data=s_pdf_b, file_name="kpi_senior_report.pdf", mime="application/pdf", key="dl_sen_rep_pdf")
 
-        # 4) تقرير تقييم المدير المباشر (فلتر بأسماء المديرين المباشرين + موظف 1، موظف 2... + إجمالي كل موظف + الإجمالي الكلي)
+        # تقرير المدير المباشر: فلتر بأسماء المديرين المباشرين + موظف 1، موظف 2... + إجمالي كل موظف + الإجمالي الكلي
         with gm_tabs[3]:
-            st.markdown("#### تقرير تقييم المدير المباشر")
+            st.markdown("#### تقرير المدير المباشر")
             managers_only = [
                 e for e in employees
                 if (e.get("status") or "active") == "active"
@@ -3475,9 +3454,9 @@ def render_kpis_module(
                     m_hdr_h = "".join(f"<th>{ck}</th>" for ck in mgr_matrix[0].keys())
                     m_bdy_h = "".join("<tr>" + "".join(f"<td>{ro[ck]}</td>" for ck in mgr_matrix[0].keys()) + "</tr>" for ro in mgr_matrix)
                     m_doc_j = json.dumps(
-                        f"<!DOCTYPE html><html dir='rtl' lang='ar'><head><meta charset='utf-8'><title>تقرير تقييم المدير المباشر</title>"
+                        f"<!DOCTYPE html><html dir='rtl' lang='ar'><head><meta charset='utf-8'><title>تقرير المدير المباشر</title>"
                         "<style>body{font-family:'Cairo',Tahoma,sans-serif;direction:rtl;margin:28px;}table{width:100%;border-collapse:collapse;}th,td{border:1px solid #334155;padding:10px;text-align:center;}th{background:#f1f5f9;}</style>"
-                        f"</head><body><h3>تقرير تقييم المدير المباشر: {picked_mgr_obj.get('name_ar')} | الإجمالي الكلي: {grand_tot_m:g}</h3><table><thead><tr>{m_hdr_h}</tr></thead><tbody>{m_bdy_h}</tbody></table></body></html>"
+                        f"</head><body><h3>تقرير المدير المباشر: {picked_mgr_obj.get('name_ar')} | الإجمالي الكلي: {grand_tot_m:g}</h3><table><thead><tr>{m_hdr_h}</tr></thead><tbody>{m_bdy_h}</tbody></table></body></html>"
                     )
                     mc_1, mc_2 = st.columns([1.5, 1.5])
                     with mc_1:
@@ -3489,9 +3468,9 @@ def render_kpis_module(
                         m_pdf_b = _build_simple_pdf_bytes("Direct Manager KPI Report", [f"Manager: {picked_mgr_obj.get('employee_no', '')}", f"Grand Total: {grand_tot_m:g}"])
                         st.download_button("📄 تصدير PDF", data=m_pdf_b, file_name="kpi_manager_report.pdf", mime="application/pdf", key="dl_mgr_rep_pdf")
 
-        # 5) تقرير تقييم المدير العام (بدون فلتر لأنه مدير عام واحد)
+        # تقرير المدير العام: بدون فلتر + الأسئلة الخاصة بتقييم المدير العام + إجمالي كل مقيِّم + الإجمالي الكلي
         with gm_tabs[4]:
-            st.markdown("#### تقرير تقييم المدير العام")
+            st.markdown("#### تقرير المدير العام")
             gm_qs = peer_q_by_target.get("gm") or []
             q_names_gm = [str(x.get("question") or "") for x in gm_qs if str(x.get("question") or "").strip()]
 
@@ -3539,9 +3518,9 @@ def render_kpis_module(
                 g_hdr_h = "".join(f"<th>{ck}</th>" for ck in gm_matrix[0].keys())
                 g_bdy_h = "".join("<tr>" + "".join(f"<td>{ro[ck]}</td>" for ck in gm_matrix[0].keys()) + "</tr>" for ro in gm_matrix)
                 g_doc_j = json.dumps(
-                    f"<!DOCTYPE html><html dir='rtl' lang='ar'><head><meta charset='utf-8'><title>تقرير تقييم المدير العام</title>"
+                    f"<!DOCTYPE html><html dir='rtl' lang='ar'><head><meta charset='utf-8'><title>تقرير المدير العام</title>"
                     "<style>body{font-family:'Cairo',Tahoma,sans-serif;direction:rtl;margin:28px;}table{width:100%;border-collapse:collapse;}th,td{border:1px solid #334155;padding:10px;text-align:center;}th{background:#f1f5f9;}</style>"
-                    f"</head><body><h3>تقرير تقييم المدير العام | الإجمالي الكلي: {grand_tot_g:g}</h3><table><thead><tr>{g_hdr_h}</tr></thead><tbody>{g_bdy_h}</tbody></table></body></html>"
+                    f"</head><body><h3>تقرير المدير العام | الإجمالي الكلي: {grand_tot_g:g}</h3><table><thead><tr>{g_hdr_h}</tr></thead><tbody>{g_bdy_h}</tbody></table></body></html>"
                 )
                 gc_1, gc_2 = st.columns([1.5, 1.5])
                 with gc_1:
@@ -3584,7 +3563,7 @@ def render_kpis_module(
             q_label = str(item.get("question") or "")
             q_pts = max(0.5, float(item.get("points") or 10.0))
             val_q = st.slider(
-                f"{q_label} (الدرجة القصوى: {q_pts:g})",
+                f"{q_label} (الحد الأقصى: {q_pts:g})",
                 min_value=0.0,
                 max_value=float(q_pts),
                 value=float(min(q_pts, round_half_up_2(q_pts * 0.8))),
@@ -3661,7 +3640,7 @@ def render_kpis_module(
                     pts_s = max(0.5, float(item_s.get("points") or 10.0))
                     sen_scores[q_s] = float(
                         st.slider(
-                            f"{q_s} (الدرجة القصوى: {pts_s:g})",
+                            f"{q_s} (الحد الأقصى: {pts_s:g})",
                             min_value=0.0,
                             max_value=float(pts_s),
                             value=float(min(pts_s, round_half_up_2(pts_s * 0.8))),
@@ -3705,7 +3684,7 @@ def render_kpis_module(
                 sel_sub_lbl = st.selectbox("اختر الموظف", list(sub_map.keys()), key="mgr_rate_sub_emp_sel")
                 picked_sub_emp = sub_map[sel_sub_lbl]
                 auto_sub_cat = _map_job_title_to_self_tab(picked_sub_emp)
-                st.caption(f"الموظف: **{picked_sub_emp.get('name_ar')}** — الفئة المرتبطة: **`{auto_sub_cat}`**")
+                st.caption(f"الموظف: **{picked_sub_emp.get('name_ar')}** — الفئة: **`{auto_sub_cat}`**")
 
                 sub_q_items = self_q_by_tab.get(auto_sub_cat) or []
                 max_sub_pts = round_half_up_2(sum(float(item.get("points") or 0) for item in sub_q_items))
@@ -3716,7 +3695,7 @@ def render_kpis_module(
                     pts_sq = max(0.5, float(item_sq.get("points") or 10.0))
                     sub_scores_map[q_sq] = float(
                         st.slider(
-                            f"{q_sq} (الدرجة القصوى: {pts_sq:g})",
+                            f"{q_sq} (الحد الأقصى: {pts_sq:g})",
                             min_value=0.0,
                             max_value=float(pts_sq),
                             value=float(min(pts_sq, round_half_up_2(pts_sq * 0.8))),
@@ -3770,7 +3749,7 @@ def render_kpis_module(
                 pts_m = max(0.5, float(item_m.get("points") or 10.0))
                 mgr_scores_val[q_m] = float(
                     st.slider(
-                        f"{q_m} (الدرجة القصوى: {pts_m:g})",
+                        f"{q_m} (الحد الأقصى: {pts_m:g})",
                         min_value=0.0,
                         max_value=float(pts_m),
                         value=float(min(pts_m, round_half_up_2(pts_m * 0.8))),
@@ -3817,7 +3796,7 @@ def render_kpis_module(
             pts_g = max(0.5, float(item_g.get("points") or 10.0))
             gm_scores_val[q_g] = float(
                 st.slider(
-                    f"{q_g} (الدرجة القصوى: {pts_g:g})",
+                    f"{q_g} (الحد الأقصى: {pts_g:g})",
                     min_value=0.0,
                     max_value=float(pts_g),
                     value=float(min(pts_g, round_half_up_2(pts_g * 0.8))),
@@ -4328,7 +4307,7 @@ def render_admin_and_staff(
 
         for idx_t, t_name in enumerate(KPI_CONFIG_TABS):
             with cfg_tabs[idx_t]:
-                if t_name in ("استقبال", "استقبال وسحب عينات", "خدمة عملاء", "كيميائيين"):
+                if t_name in ("استقبال", "استقبال وسحب عينات", "كول سنتر", "كيميائيين"):
                     _render_q_editor_block(
                         section_title=f"أسئلة تقييم ({t_name}) لنفسه",
                         q_list=list(self_q_all.get(t_name) or []),
