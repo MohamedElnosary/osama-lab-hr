@@ -102,6 +102,16 @@ def _ensure_bootstrap_gm(employees: List[Dict[str, Any]]) -> List[Dict[str, Any]
     return [created] if created else fetch_table("employees", limit=1500)
 
 
+def _refresh_current_user(session_user: Dict[str, Any], employees: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """مزامنة بيانات المستخدم المسجل حالياً مع أحدث نسخة في جدول الموظفين."""
+    uid = str(session_user.get("id") or "")
+    eno = str(session_user.get("employee_no") or "")
+    for emp in employees:
+        if (uid and str(emp.get("id") or "") == uid) or (eno and str(emp.get("employee_no") or "") == eno):
+            return emp
+    return session_user
+
+
 def main() -> None:
     try:
         employees = _ensure_bootstrap_gm(fetch_table("employees", order_by="employee_no", limit=1500))
@@ -153,7 +163,9 @@ def main() -> None:
                     st.error("رمز الدخول غير صحيح.")
         return
 
-    current_user = st.session_state["current_user"]
+    current_user = _refresh_current_user(st.session_state["current_user"], employees)
+    st.session_state["current_user"] = current_user
+
     if "active_page" not in st.session_state:
         st.session_state["active_page"] = "الداش بورد"
 
