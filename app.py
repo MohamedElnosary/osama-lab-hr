@@ -8,9 +8,10 @@ from ui_components import (
     render_approvals_inbox,
     render_attendance_and_payroll,
     render_dashboard,
-    render_kpis_and_reports,
+    render_kpis_module,
     render_leaves_module,
     render_penalties_rewards_advances,
+    render_reports_module,
 )
 
 st.set_page_config(
@@ -102,16 +103,6 @@ def _ensure_bootstrap_gm(employees: List[Dict[str, Any]]) -> List[Dict[str, Any]
     return [created] if created else fetch_table("employees", limit=1500)
 
 
-def _refresh_current_user(session_user: Dict[str, Any], employees: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """مزامنة بيانات المستخدم المسجل حالياً مع أحدث نسخة في جدول الموظفين."""
-    uid = str(session_user.get("id") or "")
-    eno = str(session_user.get("employee_no") or "")
-    for emp in employees:
-        if (uid and str(emp.get("id") or "") == uid) or (eno and str(emp.get("employee_no") or "") == eno):
-            return emp
-    return session_user
-
-
 def main() -> None:
     try:
         employees = _ensure_bootstrap_gm(fetch_table("employees", order_by="employee_no", limit=1500))
@@ -128,6 +119,12 @@ def main() -> None:
         kpi_evaluations = fetch_table("kpi_evaluations", order_by="created_at", desc=True, limit=2000)
         org_rows = fetch_table("org_settings", limit=5)
         org_settings: Dict[str, Any] = org_rows[0] if org_rows else {"org_name": "معامل ا.د أسامة عبد المتعال منصور"}
+
+        if "current_user" in st.session_state and st.session_state["current_user"]:
+            cur_uid = str(st.session_state["current_user"].get("id") or "")
+            matched_emp = next((e for e in employees if str(e.get("id") or "") == cur_uid), None)
+            if matched_emp:
+                st.session_state["current_user"] = matched_emp
     except Exception as exc:
         st.error("تعذر تحميل البيانات من Supabase.")
         st.code(str(exc), language="text")
@@ -163,9 +160,7 @@ def main() -> None:
                     st.error("رمز الدخول غير صحيح.")
         return
 
-    current_user = _refresh_current_user(st.session_state["current_user"], employees)
-    st.session_state["current_user"] = current_user
-
+    current_user = st.session_state["current_user"]
     if "active_page" not in st.session_state:
         st.session_state["active_page"] = "الداش بورد"
 
@@ -188,7 +183,8 @@ def main() -> None:
             "الإجازات والأرصدة",
             "الجزاءات والمكافآت والسلف",
             "البصمة والـ Payroll",
-            "التقييم (KPIs) والتقارير",
+            "التقارير",
+            "الـ KPIs",
             "الموظفون والفروع والصلاحيات",
         ]
         current_radio_val = st.session_state["active_page"] if st.session_state["active_page"] in main_menu else "الداش بورد"
@@ -216,7 +212,7 @@ def main() -> None:
         f"""
         <div class="top-banner">
             <h3>{org_settings.get('org_name') or 'معامل ا.د أسامة عبد المتعال منصور'}</h3>
-            <p>نظام HR متكامل (الإجازات، الجزاءات والمكافآت، السلف، البصمة والمرتبات، الـ KPIs والتقارير)</p>
+            <p>نظام HR متكامل (الإجازات، الجزاءات والمكافآت، السلف، البصمة والمرتبات، التقارير والـ KPIs)</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -251,8 +247,18 @@ def main() -> None:
             org_settings,
             leave_requests=leave_requests,
         )
-    elif page == "التقييم (KPIs) والتقارير":
-        render_kpis_and_reports(
+    elif page == "التقارير":
+        render_reports_module(
+            current_user,
+            employees,
+            leave_requests,
+            attendance_logs,
+            penalties_rewards,
+            advances,
+            kpi_evaluations,
+        )
+    elif page == "الـ KPIs":
+        render_kpis_module(
             current_user,
             employees,
             leave_requests,
