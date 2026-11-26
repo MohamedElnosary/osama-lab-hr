@@ -69,6 +69,7 @@ KPI_CONFIG_TABS: List[str] = [
     "استقبال وسحب عينات",
     "خدمة عملاء",
     "كيميائيين",
+    "سينيور",
     "مدير مباشر",
     "مدير عام",
 ]
@@ -78,6 +79,7 @@ KPI_SELF_TABS: List[str] = [
     "استقبال وسحب عينات",
     "خدمة عملاء",
     "كيميائيين",
+    "سينيور",
     "مدير مباشر",
 ]
 
@@ -105,6 +107,12 @@ DEFAULT_SELF_QUESTIONS_BY_TAB: Dict[str, List[Dict[str, Any]]] = {
         {"question": "الالتزام بجودة التشغيل ومراقبة الجودة (QC)", "points": 25.0},
         {"question": "الالتزام بالمواعيد والانضباط داخل المعمل", "points": 25.0},
         {"question": "التعاون وحل المشكلات الفنية والالتزام بالسياسات", "points": 20.0},
+    ],
+    "سينيور": [
+        {"question": "دقة التحاليل والمراجعة الفنية النهائية للنتائج", "points": 30.0},
+        {"question": "متابعة سير العمل اليومي وضبط جودة الأداء", "points": 25.0},
+        {"question": "توجيه وتدريب فريق العمل ومتابعة انضباطهم", "points": 25.0},
+        {"question": "الالتزام بالسياسات الإدارية ورفع التقارير بدقة", "points": 20.0},
     ],
     "مدير مباشر": [
         {"question": "تحقيق مستهدفات الأداء وجودة الخدمات بالفرع", "points": 30.0},
@@ -254,7 +262,9 @@ def _map_job_title_to_self_tab(emp: Dict[str, Any]) -> str:
 
     if "مدير مباشر" in jt or role == "manager":
         return "مدير مباشر"
-    if "كيميائي" in jt or "كيميائ" in jt or role == "senior":
+    if "senior" in jt or "سينيور" in jt or role == "senior":
+        return "سينيور"
+    if "كيميائي" in jt or "كيميائ" in jt:
         return "كيميائيين"
     if "خدمة عملاء" in jt or "كول" in jt:
         return "خدمة عملاء"
@@ -3530,73 +3540,62 @@ def render_admin_and_staff(
 
         for idx_t, t_name in enumerate(KPI_CONFIG_TABS):
             with cfg_tabs[idx_t]:
-                if t_name == "مدير عام":
-                    st.info("المدير العام ليس له أسئلة تقييم ذاتي لأنه لا يقيّم نفسه، ويتم تقييمه من موظفي الاستقبال واستقبال وسحب العينات.")
+                if t_name in ("استقبال", "استقبال وسحب عينات", "خدمة عملاء", "كيميائيين"):
+                    _render_q_editor_block(
+                        section_title=f"أسئلة تقييم ({t_name}) لنفسه",
+                        q_list=list(self_q_all.get(t_name) or []),
+                        form_key=f"add_self_q_form_{t_name}",
+                        del_prefix=f"del_self_q_{t_name}",
+                        on_change_callback=lambda upd, s_all=self_q_all, tk=t_name: _save_org_settings_patch(
+                            {"kpi_self_questions": {**s_all, tk: upd}}
+                        ),
+                    )
+                elif t_name == "سينيور":
+                    _render_q_editor_block(
+                        section_title="أسئلة تقييم السينيور لنفسه",
+                        q_list=list(self_q_all.get("سينيور") or []),
+                        form_key="add_self_q_form_senior",
+                        del_prefix="del_self_q_senior",
+                        on_change_callback=lambda upd, s_all=self_q_all: _save_org_settings_patch(
+                            {"kpi_self_questions": {**s_all, "سينيور": upd}}
+                        ),
+                    )
+                    st.divider()
+                    _render_q_editor_block(
+                        section_title="الأسئلة الخاصة بتقييم الموظفين للسينيور",
+                        q_list=list(peer_q_all.get("senior") or []),
+                        form_key="add_sen_peer_q_form_tab",
+                        del_prefix="del_sen_peer_q_tab",
+                        on_change_callback=lambda upd, p_all=peer_q_all: _save_org_settings_patch(
+                            {"kpi_peer_questions_v2": {**p_all, "senior": upd}}
+                        ),
+                    )
+                elif t_name == "مدير مباشر":
+                    _render_q_editor_block(
+                        section_title="أسئلة تقييم المدير المباشر لنفسه",
+                        q_list=list(self_q_all.get("مدير مباشر") or []),
+                        form_key="add_self_q_form_manager",
+                        del_prefix="del_self_q_manager",
+                        on_change_callback=lambda upd, s_all=self_q_all: _save_org_settings_patch(
+                            {"kpi_self_questions": {**s_all, "مدير مباشر": upd}}
+                        ),
+                    )
+                    st.divider()
+                    _render_q_editor_block(
+                        section_title="الأسئلة الخاصة بتقييم الموظفين للمدير المباشر",
+                        q_list=list(peer_q_all.get("manager") or []),
+                        form_key="add_mgr_peer_q_form_tab",
+                        del_prefix="del_mgr_peer_q_tab",
+                        on_change_callback=lambda upd, p_all=peer_q_all: _save_org_settings_patch(
+                            {"kpi_peer_questions_v2": {**p_all, "manager": upd}}
+                        ),
+                    )
+                elif t_name == "مدير عام":
                     _render_q_editor_block(
                         section_title="الأسئلة الخاصة بتقييم الموظفين للمدير العام",
                         q_list=list(peer_q_all.get("gm") or []),
                         form_key="add_gm_peer_q_form_tab",
                         del_prefix="del_gm_peer_q_tab",
-                        on_change_callback=lambda upd, p_all=peer_q_all: _save_org_settings_patch(
-                            {"kpi_peer_questions_v2": {**p_all, "gm": upd}}
-                        ),
-                    )
-                elif t_name == "مدير مباشر":
-                    _render_q_editor_block(
-                        section_title=f"أسئلة تقييم ({t_name}) لنفسه",
-                        q_list=list(self_q_all.get(t_name) or []),
-                        form_key=f"add_self_q_form_{t_name}",
-                        del_prefix=f"del_self_q_{t_name}",
-                        on_change_callback=lambda upd, s_all=self_q_all, tk=t_name: _save_org_settings_patch(
-                            {"kpi_self_questions": {**s_all, tk: upd}}
-                        ),
-                    )
-                    st.divider()
-                    _render_q_editor_block(
-                        section_title="الأسئلة الخاصة بتقييم الموظفين للمدير العام",
-                        q_list=list(peer_q_all.get("gm") or []),
-                        form_key="add_gm_peer_q_form_under_mgr",
-                        del_prefix="del_gm_peer_q_under_mgr",
-                        on_change_callback=lambda upd, p_all=peer_q_all: _save_org_settings_patch(
-                            {"kpi_peer_questions_v2": {**p_all, "gm": upd}}
-                        ),
-                    )
-                else:
-                    _render_q_editor_block(
-                        section_title=f"أسئلة تقييم ({t_name}) لنفسه",
-                        q_list=list(self_q_all.get(t_name) or []),
-                        form_key=f"add_self_q_form_{t_name}",
-                        del_prefix=f"del_self_q_{t_name}",
-                        on_change_callback=lambda upd, s_all=self_q_all, tk=t_name: _save_org_settings_patch(
-                            {"kpi_self_questions": {**s_all, tk: upd}}
-                        ),
-                    )
-                    st.divider()
-                    _render_q_editor_block(
-                        section_title=f"الأسئلة الخاصة بتقييم الموظفين في ({t_name}) للسينيور",
-                        q_list=list(peer_q_all.get("senior") or []),
-                        form_key=f"add_sen_peer_q_form_{t_name}",
-                        del_prefix=f"del_sen_peer_q_{t_name}",
-                        on_change_callback=lambda upd, p_all=peer_q_all: _save_org_settings_patch(
-                            {"kpi_peer_questions_v2": {**p_all, "senior": upd}}
-                        ),
-                    )
-                    st.divider()
-                    _render_q_editor_block(
-                        section_title=f"الأسئلة الخاصة بتقييم الموظفين في ({t_name}) للمدير المباشر",
-                        q_list=list(peer_q_all.get("manager") or []),
-                        form_key=f"add_mgr_peer_q_form_{t_name}",
-                        del_prefix=f"del_mgr_peer_q_{t_name}",
-                        on_change_callback=lambda upd, p_all=peer_q_all: _save_org_settings_patch(
-                            {"kpi_peer_questions_v2": {**p_all, "manager": upd}}
-                        ),
-                    )
-                    st.divider()
-                    _render_q_editor_block(
-                        section_title=f"الأسئلة الخاصة بتقييم الموظفين في ({t_name}) للمدير العام",
-                        q_list=list(peer_q_all.get("gm") or []),
-                        form_key=f"add_gm_peer_q_form_{t_name}",
-                        del_prefix=f"del_gm_peer_q_{t_name}",
                         on_change_callback=lambda upd, p_all=peer_q_all: _save_org_settings_patch(
                             {"kpi_peer_questions_v2": {**p_all, "gm": upd}}
                         ),
