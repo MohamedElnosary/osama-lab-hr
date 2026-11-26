@@ -2306,141 +2306,45 @@ def render_attendance_and_payroll(
             if float(fa_amt or 0) > 0
         )
 
-        st.markdown(
-            f"""
-            <style>
-                .pay-card-box {{
-                    background: #ffffff;
-                    border: 1.5px solid #cbd5e1;
-                    border-radius: 14px;
-                    padding: 20px;
-                    margin-top: 10px;
-                    box-shadow: 0 4px 14px rgba(15, 76, 92, 0.08);
-                    direction: rtl;
-                    font-family: 'Cairo', sans-serif;
-                }}
-                .pay-header-strip {{
-                    background: linear-gradient(135deg, #0f4c5c 0%, #1c7285 100%);
-                    color: #ffffff;
-                    border-radius: 10px;
-                    padding: 12px 18px;
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: center;
-                    flex-wrap: wrap;
-                    gap: 10px;
-                    margin-bottom: 14px;
-                }}
-                .pay-header-item {{
-                    font-size: 14.5px;
-                    font-weight: 700;
-                }}
-                .pay-base-row {{
-                    background: #eff6ff;
-                    border: 1.5px solid #93c5fd;
-                    border-radius: 10px;
-                    padding: 12px 16px;
-                    margin-bottom: 14px;
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: center;
-                    font-size: 15.5px;
-                    font-weight: 700;
-                    color: #1e3a8a;
-                }}
-                .pay-items-table {{
-                    width: 100%;
-                    border-collapse: collapse;
-                    margin-bottom: 16px;
-                }}
-                .pay-items-table th {{
-                    background: #f1f5f9;
-                    color: #0f172a;
-                    font-weight: 700;
-                    font-size: 14px;
-                    padding: 10px;
-                    border: 1px solid #cbd5e1;
-                    text-align: center;
-                }}
-                .pay-items-table td {{
-                    padding: 10px;
-                    border: 1px solid #e2e8f0;
-                    font-size: 14.5px;
-                    font-weight: 600;
-                    text-align: center;
-                    color: #1e293b;
-                }}
-                .pay-plus {{
-                    color: #15803d;
-                    font-weight: 700;
-                }}
-                .pay-minus {{
-                    color: #b91c1c;
-                    font-weight: 700;
-                }}
-                .pay-net-box {{
-                    background: linear-gradient(135deg, #14532d 0%, #166534 100%);
-                    color: #ffffff;
-                    border-radius: 11px;
-                    padding: 14px 20px;
-                    text-align: center;
-                    font-size: 18px;
-                    font-weight: 700;
-                    letter-spacing: 0.2px;
-                }}
-            </style>
-            <div class="pay-card-box">
-                <div class="pay-header-strip">
-                    <div class="pay-header-item">👤 الاسم: {emp_name_txt}</div>
-                    <div class="pay-header-item">💼 الوظيفة: {emp_job_txt}</div>
-                    <div class="pay-header-item">🔢 الرقم الوظيفي: {emp_no_txt}</div>
-                </div>
-                <div class="pay-base-row">
-                    <span>💰 المرتب الأساسي</span>
-                    <span>{my_res['base_salary']:,.2f} جنيه</span>
-                </div>
-                <table class="pay-items-table">
-                    <thead>
-                        <tr>
-                            <th>البند</th>
-                            <th>القيمة (جنيه)</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr>
-                            <td>إجازات رسمية (+يوم)</td>
-                            <td class="pay-plus">+ {my_res['holiday_bonus']:,.2f} ج</td>
-                        </tr>
-                        <tr>
-                            <td>المكافآت</td>
-                            <td class="pay-plus">+ {my_res['variable_rewards_total']:,.2f} ج</td>
-                        </tr>
-                        {fixed_rows_html}
-                        <tr>
-                            <td>إضافي الحضور والانصراف</td>
-                            <td class="pay-plus">+ {my_res['overtime_pay']:,.2f} ج</td>
-                        </tr>
-                        <tr>
-                            <td>خصم السلف</td>
-                            <td class="pay-minus">- {my_res['advances_deduction']:,.2f} ج</td>
-                        </tr>
-                        <tr>
-                            <td>خصم الجزاءات</td>
-                            <td class="pay-minus">- {my_res['penalties_deduction']:,.2f} ج</td>
-                        </tr>
-                        <tr>
-                            <td>خصم التأخير / الانصراف</td>
-                            <td class="pay-minus">- {my_res['late_deduction']:,.2f} ج</td>
-                        </tr>
-                    </tbody>
-                </table>
-                <div class="pay-net-box">
-                    ✅ المرتب الفعلي: {my_res['net_salary']:,.2f} جنيه
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
+        pay_card_html = (
+            "<style>"
+            ".pay-card-box{background:#ffffff;border:1.5px solid #cbd5e1;border-radius:14px;padding:20px;margin-top:10px;box-shadow:0 4px 14px rgba(15,76,92,0.08);direction:rtl;font-family:'Cairo',sans-serif;}"
+            ".pay-header-strip{background:linear-gradient(135deg,#0f4c5c 0%,#1c7285 100%);color:#ffffff;border-radius:10px;padding:12px 18px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px;}"
+            ".pay-header-item{font-size:14.5px;font-weight:700;}"
+            ".pay-base-row{background:#eff6ff;border:1.5px solid #93c5fd;border-radius:10px;padding:12px 16px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;font-size:15.5px;font-weight:700;color:#1e3a8a;}"
+            ".pay-items-table{width:100%;border-collapse:collapse;margin-bottom:16px;}"
+            ".pay-items-table th{background:#f1f5f9;color:#0f172a;font-weight:700;font-size:14px;padding:10px;border:1px solid #cbd5e1;text-align:center;}"
+            ".pay-items-table td{padding:10px;border:1px solid #e2e8f0;font-size:14.5px;font-weight:600;text-align:center;color:#1e293b;}"
+            ".pay-plus{color:#15803d;font-weight:700;}"
+            ".pay-minus{color:#b91c1c;font-weight:700;}"
+            ".pay-net-box{background:linear-gradient(135deg,#14532d 0%,#166534 100%);color:#ffffff;border-radius:11px;padding:14px 20px;text-align:center;font-size:18px;font-weight:700;}"
+            "</style>"
+            "<div class='pay-card-box'>"
+            "<div class='pay-header-strip'>"
+            f"<div class='pay-header-item'>👤 الاسم: {emp_name_txt}</div>"
+            f"<div class='pay-header-item'>💼 الوظيفة: {emp_job_txt}</div>"
+            f"<div class='pay-header-item'>🔢 الرقم الوظيفي: {emp_no_txt}</div>"
+            "</div>"
+            "<div class='pay-base-row'>"
+            "<span>💰 المرتب الأساسي</span>"
+            f"<span>{my_res['base_salary']:,.2f} جنيه</span>"
+            "</div>"
+            "<table class='pay-items-table'>"
+            "<thead><tr><th>البند</th><th>القيمة (جنيه)</th></tr></thead>"
+            "<tbody>"
+            f"<tr><td>إجازات رسمية (+يوم)</td><td class='pay-plus'>+ {my_res['holiday_bonus']:,.2f} ج</td></tr>"
+            f"<tr><td>المكافآت</td><td class='pay-plus'>+ {my_res['variable_rewards_total']:,.2f} ج</td></tr>"
+            f"{fixed_rows_html}"
+            f"<tr><td>إضافي الحضور والانصراف</td><td class='pay-plus'>+ {my_res['overtime_pay']:,.2f} ج</td></tr>"
+            f"<tr><td>خصم السلف</td><td class='pay-minus'>- {my_res['advances_deduction']:,.2f} ج</td></tr>"
+            f"<tr><td>خصم الجزاءات</td><td class='pay-minus'>- {my_res['penalties_deduction']:,.2f} ج</td></tr>"
+            f"<tr><td>خصم التأخير / الانصراف</td><td class='pay-minus'>- {my_res['late_deduction']:,.2f} ج</td></tr>"
+            "</tbody>"
+            "</table>"
+            f"<div class='pay-net-box'>✅ المرتب الفعلي: {my_res['net_salary']:,.2f} جنيه</div>"
+            "</div>"
         )
+        st.markdown(pay_card_html, unsafe_allow_html=True)
     t_idx += 1
 
     # --- 5) شيت المرتبات (للمدير العام و HR ورئيس مجلس الإدارة فقط) ---
@@ -2859,7 +2763,6 @@ def render_admin_and_staff(
         with t_col3:
             st.text_input("عدد ساعات العمل", value=add_hours_str, disabled=True, key=f"add_emp_hours_box_{add_hours_val}")
 
-        # المرتب الأساسي + مكافآت ثابتة (اختيار أكثر من بند وإدخال قيمة كل بند)
         sal_fa_col1, sal_fa_col2 = st.columns([1.2, 2.8])
         with sal_fa_col1:
             base_sal = st.number_input("المرتب الأساسي (جنيه)", min_value=0.0, value=5000.0, step=250.0, key="add_emp_base_sal")
