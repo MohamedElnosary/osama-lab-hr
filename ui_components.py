@@ -3156,7 +3156,7 @@ def render_kpis_module(
                     st.success(f"✅ تم حفظ تقييم الموظف {picked_remp.get('name_ar')} بنجاح.")
                     st.rerun()
 
-        # 2) تقرير تقييم الموظف + التفاصيل الكاملة للفترات (الإجازات، الجزاءات، المكافآت، السلف، الإضافي) + PDF
+        # 2) تقرير تقييم الموظف (البنود + تقييم الموظف لنفسه + تقييم المدير المباشر + الإجمالي + تفاصيل الفترة + PDF)
         with gm_tabs[1]:
             st.markdown("#### تقرير تقييم الموظف")
             report_emps = [
@@ -3171,10 +3171,8 @@ def render_kpis_module(
                 sel_rep_emp_lbl = st.selectbox("اختر الموظف", list(rep_emp_map.keys()), key="gm_kpi_rep_emp_sel")
                 target_rep_emp = rep_emp_map[sel_rep_emp_lbl]
                 t_emp_ids = _emp_identifiers(target_rep_emp)
-                has_senior_flag = bool(str(target_rep_emp.get("senior_id") or "").strip())
 
                 self_eval_rec: Optional[Dict[str, Any]] = None
-                senior_eval_rec: Optional[Dict[str, Any]] = None
                 mgr_eval_rec: Optional[Dict[str, Any]] = None
 
                 for ev in kpi_evaluations:
@@ -3185,16 +3183,12 @@ def render_kpis_module(
                     if st_ev == "submitted_by_employee" or "ذاتي" in lbl_ev:
                         if self_eval_rec is None:
                             self_eval_rec = ev
-                    elif st_ev == "peer_senior_evaluated" or "تقييم سينيور" in lbl_ev:
-                        if senior_eval_rec is None:
-                            senior_eval_rec = ev
-                    elif st_ev in ("peer_manager_evaluated", "reviewed_by_manager") or "مدير مباشر" in lbl_ev or "مدير عام" in lbl_ev:
+                    elif "مدير مباشر" in lbl_ev or st_ev == "peer_manager_evaluated":
                         if mgr_eval_rec is None:
                             mgr_eval_rec = ev
 
                 self_scores_map: Dict[str, float] = (self_eval_rec or {}).get("self_scores") or {}
                 mgr_scores_map: Dict[str, float] = (mgr_eval_rec or {}).get("manager_scores") or {}
-                sen_scores_map: Dict[str, float] = (senior_eval_rec or {}).get("manager_scores") or {}
 
                 cat_for_emp = _map_job_title_to_self_tab(target_rep_emp)
                 base_q_list = [str(x.get("question") or "") for x in (self_q_by_tab.get(cat_for_emp) or []) if str(x.get("question") or "").strip()]
@@ -3203,13 +3197,11 @@ def render_kpis_module(
                         base_q_list
                         + list(self_scores_map.keys())
                         + list(mgr_scores_map.keys())
-                        + list(sen_scores_map.keys())
                     )
                 )
 
                 rows_data: List[Dict[str, Any]] = []
                 tot_self_val = 0.0
-                tot_sen_val = 0.0
                 tot_mgr_val = 0.0
 
                 for crit_q in all_criteria_names:
@@ -3217,36 +3209,17 @@ def render_kpis_module(
                     m_val = round_half_up_2(float(mgr_scores_map.get(crit_q) or 0.0))
                     tot_self_val = round_half_up_2(tot_self_val + s_val)
                     tot_mgr_val = round_half_up_2(tot_mgr_val + m_val)
+                    rows_data.append({
+                        "البند": crit_q,
+                        "تقييم الموظف لنفسه": s_val,
+                        "تقييم المدير المباشر": m_val,
+                    })
 
-                    if has_senior_flag:
-                        sn_val = round_half_up_2(float(sen_scores_map.get(crit_q) or 0.0))
-                        tot_sen_val = round_half_up_2(tot_sen_val + sn_val)
-                        rows_data.append({
-                            "بند التقييم": crit_q,
-                            "تقييم الموظف لنفسه": s_val,
-                            "تقييم السينيور": sn_val,
-                            "تقييم المدير المباشر": m_val,
-                        })
-                    else:
-                        rows_data.append({
-                            "بند التقييم": crit_q,
-                            "تقييم الموظف لنفسه": s_val,
-                            "تقييم المدير المباشر": m_val,
-                        })
-
-                if has_senior_flag:
-                    total_row: Dict[str, Any] = {
-                        "بند التقييم": "الإجمالي",
-                        "تقييم الموظف لنفسه": tot_self_val,
-                        "تقييم السينيور": tot_sen_val,
-                        "تقييم المدير المباشر": tot_mgr_val,
-                    }
-                else:
-                    total_row = {
-                        "بند التقييم": "الإجمالي",
-                        "تقييم الموظف لنفسه": tot_self_val,
-                        "تقييم المدير المباشر": tot_mgr_val,
-                    }
+                total_row: Dict[str, Any] = {
+                    "البند": "الإجمالي",
+                    "تقييم الموظف لنفسه": tot_self_val,
+                    "تقييم المدير المباشر": tot_mgr_val,
+                }
 
                 st.markdown(f"### الاسم: {target_rep_emp.get('name_ar')}")
                 st.dataframe(rows_data + [total_row], use_container_width=True, hide_index=True)
@@ -3303,7 +3276,6 @@ def render_kpis_module(
                     f"إجمالي الإضافي: **{det['total_ot_days']} يوم ({det['total_ot_mins']} دقيقة)**"
                 )
 
-                # طباعة الجدول في ورقة مستقلة + تصدير PDF
                 t_hdr_html = "".join(f"<th>{c_k}</th>" for c_k in total_row.keys())
                 t_bdy_html = "".join(
                     "<tr>" + "".join(f"<td>{r_i[c_k]}</td>" for c_k in total_row.keys()) + "</tr>"
@@ -3341,131 +3313,248 @@ def render_kpis_module(
                     )
                 with p_col_b:
                     pdf_lines = [
-                        f"Employee: {target_rep_emp.get('employee_no', '')}",
+                        f"Employee No: {target_rep_emp.get('employee_no', '')}",
                         f"Period: {kpi_start_dt.isoformat()} to {kpi_end_dt.isoformat()}",
-                        f"Self Total: {tot_self_val:g} | Manager Total: {tot_mgr_val:g}" + (f" | Senior Total: {tot_sen_val:g}" if has_senior_flag else ""),
+                        f"Self Total: {tot_self_val:g} | Direct Manager Total: {tot_mgr_val:g}",
                         f"Leaves: {det['total_leave_days']} (Casual: {det['casual_days']}, Regular: {det['regular_days']})",
                         f"Penalties Count: {det['penalties_total_cnt']} | Rewards Count: {det['rewards_total_cnt']}",
                         f"Advances Total: {det['advances_total_amt']:g} | Overtime Days: {det['total_ot_days']}",
                     ]
                     for idx_c, r_c in enumerate(rows_data, start=1):
-                        pdf_lines.append(
-                            f"Q{idx_c}: Self={r_c['تقييم الموظف لنفسه']} | Mgr={r_c['تقييم المدير المباشر']}"
-                            + (f" | Sen={r_c['تقييم السينيور']}" if has_senior_flag else "")
-                        )
-                    pdf_bytes = _build_simple_pdf_bytes(f"KPI Report - {target_rep_emp.get('employee_no', '')}", pdf_lines)
+                        pdf_lines.append(f"Item {idx_c}: Self={r_c['تقييم الموظف لنفسه']} | DirectMgr={r_c['تقييم المدير المباشر']}")
+                    pdf_bytes = _build_simple_pdf_bytes(f"Employee KPI - {target_rep_emp.get('employee_no', '')}", pdf_lines)
                     st.download_button(
                         "📄 تصدير PDF",
                         data=pdf_bytes,
-                        file_name=f"kpi_report_{target_rep_emp.get('employee_no', 'emp')}.pdf",
+                        file_name=f"kpi_employee_{target_rep_emp.get('employee_no', 'emp')}.pdf",
                         mime="application/pdf",
                         key=f"dl_kpi_pdf_{target_rep_emp['id']}",
                     )
 
-        # 3، 4، 5) تقارير تقييم السينيور / المدير المباشر / المدير العام
-        peer_report_specs = [
-            (2, "senior", "تقرير تقييم السينيور"),
-            (3, "manager", "تقرير تقييم المدير المباشر"),
-            (4, "gm", "تقرير تقييم المدير العام"),
-        ]
-        for tab_i, p_key, p_title in peer_report_specs:
-            with gm_tabs[tab_i]:
-                st.markdown(f"#### {p_title}")
-                p_qs = peer_q_by_target.get(p_key) or []
-                q_names = [str(x.get("question") or "") for x in p_qs if str(x.get("question") or "").strip()]
+        # 3) تقرير تقييم السينيور (فلتر بأسماء السينيور + موظف 1، موظف 2... + إجمالي كل موظف + الإجمالي الكلي)
+        with gm_tabs[2]:
+            st.markdown("#### تقرير تقييم السينيور")
+            seniors_only = [
+                e for e in employees
+                if (e.get("status") or "active") == "active"
+                and str(e.get("role") or "").strip().lower() == "senior"
+            ]
+            if not seniors_only:
+                st.info("لا يوجد سينيور مسجل في النظام حالياً.")
+            else:
+                sen_sel_map = {f"{s.get('name_ar')} (#{s.get('employee_no')})": s for s in seniors_only}
+                picked_sen_lbl = st.selectbox("اختر السينيور", list(sen_sel_map.keys()), key="gm_rep_sen_filter_sel")
+                picked_sen_obj = sen_sel_map[picked_sen_lbl]
+                picked_sen_ids = _emp_identifiers(picked_sen_obj)
 
-                # جمع التقييمات المقدمة من الموظفين لهذه الجهة
-                raters_map: Dict[str, Dict[str, float]] = {}
+                sen_qs = peer_q_by_target.get("senior") or []
+                q_names_sen = [str(x.get("question") or "") for x in sen_qs if str(x.get("question") or "").strip()]
+
+                rater_cols_sen: Dict[str, Dict[str, float]] = {}
+                rater_counter_s = 0
                 for ev in kpi_evaluations:
+                    if str(ev.get("employee_id") or "") not in picked_sen_ids:
+                        continue
                     lbl_e = str(ev.get("period_label") or "")
                     st_e = str(ev.get("status") or "").strip().lower()
-                    matches_target = (
-                        (p_key == "senior" and ("تقييم سينيور" in lbl_e or st_e == "peer_senior_evaluated"))
-                        or (p_key == "manager" and ("تقييم مدير مباشر" in lbl_e or st_e == "peer_manager_evaluated"))
-                        or (p_key == "gm" and ("تقييم مدير عام" in lbl_e or st_e == "peer_gm_evaluated"))
-                    )
-                    if not matches_target:
+                    if "تقييم سينيور" not in lbl_e and st_e != "peer_senior_evaluated":
                         continue
-                    rater_id = str(ev.get("manager_id") or "")
-                    rater_emp = emp_by_any_id.get(rater_id)
-                    rater_name = (rater_emp.get("name_ar") if rater_emp else None) or f"مقيّم ({rater_id[:6]})"
-                    sc_dict = ev.get("manager_scores") or {}
-                    if isinstance(sc_dict, dict) and rater_name not in raters_map:
-                        raters_map[rater_name] = {str(k): float(v or 0.0) for k, v in sc_dict.items()}
-                        for k_s in sc_dict.keys():
-                            if str(k_s) not in q_names:
-                                q_names.append(str(k_s))
+                    rater_counter_s += 1
+                    r_emp = emp_by_any_id.get(str(ev.get("manager_id") or ""))
+                    r_disp_name = f"موظف {rater_counter_s} ({r_emp.get('name_ar')})" if r_emp else f"موظف {rater_counter_s}"
+                    sc_d = ev.get("manager_scores") or {}
+                    if isinstance(sc_d, dict) and r_disp_name not in rater_cols_sen:
+                        rater_cols_sen[r_disp_name] = {str(k): float(v or 0.0) for k, v in sc_d.items()}
+                        for ks in sc_d.keys():
+                            if str(ks) not in q_names_sen:
+                                q_names_sen.append(str(ks))
 
-                if not raters_map:
-                    st.info("لا توجد تقييمات مسجلة من الموظفين لهذه الجهة بعد.")
+                if not rater_cols_sen:
+                    st.info(f"لا توجد تقييمات مسجلة من الموظفين للسينيور ({picked_sen_obj.get('name_ar')}) بعد.")
                 else:
-                    rater_names_list = list(raters_map.keys())
-                    matrix_rows: List[Dict[str, Any]] = []
-                    rater_totals: Dict[str, float] = {rn: 0.0 for rn in rater_names_list}
+                    r_names_s = list(rater_cols_sen.keys())
+                    sen_matrix: List[Dict[str, Any]] = []
+                    sen_r_totals: Dict[str, float] = {rn: 0.0 for rn in r_names_s}
 
-                    for q_item_name in q_names:
-                        row_obj: Dict[str, Any] = {"البند": q_item_name}
-                        for rn in rater_names_list:
-                            val_r = round_half_up_2(float(raters_map[rn].get(q_item_name) or 0.0))
-                            row_obj[rn] = val_r
-                            rater_totals[rn] = round_half_up_2(rater_totals[rn] + val_r)
-                        matrix_rows.append(row_obj)
+                    for qn in q_names_sen:
+                        row_d: Dict[str, Any] = {"البند": qn}
+                        for rn in r_names_s:
+                            v_s = round_half_up_2(float(rater_cols_sen[rn].get(qn) or 0.0))
+                            row_d[rn] = v_s
+                            sen_r_totals[rn] = round_half_up_2(sen_r_totals[rn] + v_s)
+                        sen_matrix.append(row_d)
 
-                    grand_total_all = round_half_up_2(sum(rater_totals.values()))
-                    tot_row_obj: Dict[str, Any] = {"البند": "الإجمالي"}
-                    for rn in rater_names_list:
-                        tot_row_obj[rn] = rater_totals[rn]
-                    matrix_rows.append(tot_row_obj)
+                    grand_tot_s = round_half_up_2(sum(sen_r_totals.values()))
+                    tot_row_s: Dict[str, Any] = {"البند": "الإجمالي"}
+                    for rn in r_names_s:
+                        tot_row_s[rn] = sen_r_totals[rn]
+                    sen_matrix.append(tot_row_s)
 
-                    st.dataframe(matrix_rows, use_container_width=True, hide_index=True)
-                    st.metric("الإجمالي الكلي", f"{grand_total_all:g}")
+                    st.dataframe(sen_matrix, use_container_width=True, hide_index=True)
+                    st.metric("الإجمالي الكلي", f"{grand_tot_s:g}")
 
-                    p_hdr_html = "".join(f"<th>{c_k}</th>" for c_k in matrix_rows[0].keys())
-                    p_bdy_html = "".join(
-                        "<tr>" + "".join(f"<td>{r_o[c_k]}</td>" for c_k in matrix_rows[0].keys()) + "</tr>"
-                        for r_o in matrix_rows
+                    s_hdr_h = "".join(f"<th>{ck}</th>" for ck in sen_matrix[0].keys())
+                    s_bdy_h = "".join("<tr>" + "".join(f"<td>{ro[ck]}</td>" for ck in sen_matrix[0].keys()) + "</tr>" for ro in sen_matrix)
+                    s_doc_j = json.dumps(
+                        f"<!DOCTYPE html><html dir='rtl' lang='ar'><head><meta charset='utf-8'><title>تقرير تقييم السينيور</title>"
+                        "<style>body{font-family:'Cairo',Tahoma,sans-serif;direction:rtl;margin:28px;}table{width:100%;border-collapse:collapse;}th,td{border:1px solid #334155;padding:10px;text-align:center;}th{background:#f1f5f9;}</style>"
+                        f"</head><body><h3>تقرير تقييم السينيور: {picked_sen_obj.get('name_ar')} | الإجمالي الكلي: {grand_tot_s:g}</h3><table><thead><tr>{s_hdr_h}</tr></thead><tbody>{s_bdy_h}</tbody></table></body></html>"
                     )
-                    p_doc_json = json.dumps(
-                        f"<!DOCTYPE html><html dir='rtl' lang='ar'><head><meta charset='utf-8'><title>{p_title}</title>"
-                        "<style>"
-                        "body{font-family:'Cairo',Tahoma,sans-serif;direction:rtl;margin:28px;color:#0f172a;}"
-                        ".hdr{font-size:20px;font-weight:700;margin-bottom:14px;padding-bottom:8px;border-bottom:2px solid #0f4c5c;}"
-                        "table{width:100%;border-collapse:collapse;margin-top:10px;}"
-                        "th,td{border:1px solid #334155;padding:10px;text-align:center;font-size:14px;}"
-                        "th{background:#f1f5f9;font-weight:700;}"
-                        "</style></head><body>"
-                        f"<div class='hdr'>{p_title} | الفترة: {period_lbl} | الإجمالي الكلي: {grand_total_all:g}</div>"
-                        f"<table><thead><tr>{p_hdr_html}</tr></thead><tbody>{p_bdy_html}</tbody></table>"
-                        "</body></html>"
-                    )
-                    pc_1, pc_2 = st.columns([1.5, 1.5])
-                    with pc_1:
+                    sc_1, sc_2 = st.columns([1.5, 1.5])
+                    with sc_1:
                         st.components.v1.html(
-                            f"""
-                            <div style="direction:rtl;text-align:right;">
-                                <button onclick="var w=window.open('','_blank','width=950,height=700');w.document.write({p_doc_json});w.document.close();w.focus();setTimeout(function(){{w.print();}},300);"
-                                        style="background:#0f4c5c;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-family:'Cairo',sans-serif;font-size:14px;font-weight:700;cursor:pointer;">
-                                    🖨️ طباعة التقرير في ورقة مستقلة
-                                </button>
-                            </div>
-                            """,
+                            f"""<div style="direction:rtl;text-align:right;"><button onclick="var w=window.open('','_blank','width=950,height=700');w.document.write({s_doc_j});w.document.close();w.focus();setTimeout(function(){{w.print();}},300);" style="background:#0f4c5c;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-family:'Cairo',sans-serif;font-size:14px;font-weight:700;cursor:pointer;">🖨️ طباعة في ورقة مستقلة</button></div>""",
                             height=50,
                         )
-                    with pc_2:
-                        p_pdf_lines = [f"Total Raters: {len(rater_names_list)} | Grand Total: {grand_total_all:g}"]
-                        for rn in rater_names_list:
-                            p_pdf_lines.append(f"Rater Total: {rater_totals[rn]:g}")
-                        p_pdf_bytes = _build_simple_pdf_bytes(p_key.upper(), p_pdf_lines)
-                        st.download_button(
-                            "📄 تصدير PDF",
-                            data=p_pdf_bytes,
-                            file_name=f"kpi_{p_key}_report.pdf",
-                            mime="application/pdf",
-                            key=f"dl_peer_pdf_{p_key}",
+                    with sc_2:
+                        s_pdf_b = _build_simple_pdf_bytes("Senior KPI Report", [f"Senior: {picked_sen_obj.get('employee_no', '')}", f"Grand Total: {grand_tot_s:g}"])
+                        st.download_button("📄 تصدير PDF", data=s_pdf_b, file_name="kpi_senior_report.pdf", mime="application/pdf", key="dl_sen_rep_pdf")
+
+        # 4) تقرير تقييم المدير المباشر (فلتر بأسماء المديرين المباشرين + موظف 1، موظف 2... + إجمالي كل موظف + الإجمالي الكلي)
+        with gm_tabs[3]:
+            st.markdown("#### تقرير تقييم المدير المباشر")
+            managers_only = [
+                e for e in employees
+                if (e.get("status") or "active") == "active"
+                and str(e.get("role") or "").strip().lower() == "manager"
+            ]
+            if not managers_only:
+                st.info("لا يوجد مدير مباشر مسجل في النظام حالياً.")
+            else:
+                mgr_sel_map = {f"{m.get('name_ar')} (#{m.get('employee_no')})": m for m in managers_only}
+                picked_mgr_lbl = st.selectbox("اختر المدير المباشر", list(mgr_sel_map.keys()), key="gm_rep_mgr_filter_sel")
+                picked_mgr_obj = mgr_sel_map[picked_mgr_lbl]
+                picked_mgr_ids = _emp_identifiers(picked_mgr_obj)
+
+                mgr_qs = peer_q_by_target.get("manager") or []
+                q_names_mgr = [str(x.get("question") or "") for x in mgr_qs if str(x.get("question") or "").strip()]
+
+                rater_cols_mgr: Dict[str, Dict[str, float]] = {}
+                rater_counter_m = 0
+                for ev in kpi_evaluations:
+                    if str(ev.get("employee_id") or "") not in picked_mgr_ids:
+                        continue
+                    lbl_e = str(ev.get("period_label") or "")
+                    st_e = str(ev.get("status") or "").strip().lower()
+                    if "تقييم مدير مباشر" not in lbl_e and st_e != "peer_manager_evaluated":
+                        continue
+                    rater_counter_m += 1
+                    r_emp = emp_by_any_id.get(str(ev.get("manager_id") or ""))
+                    r_disp_name = f"موظف {rater_counter_m} ({r_emp.get('name_ar')})" if r_emp else f"موظف {rater_counter_m}"
+                    sc_d = ev.get("manager_scores") or {}
+                    if isinstance(sc_d, dict) and r_disp_name not in rater_cols_mgr:
+                        rater_cols_mgr[r_disp_name] = {str(k): float(v or 0.0) for k, v in sc_d.items()}
+                        for ks in sc_d.keys():
+                            if str(ks) not in q_names_mgr:
+                                q_names_mgr.append(str(ks))
+
+                if not rater_cols_mgr:
+                    st.info(f"لا توجد تقييمات مسجلة من الموظفين للمدير المباشر ({picked_mgr_obj.get('name_ar')}) بعد.")
+                else:
+                    r_names_m = list(rater_cols_mgr.keys())
+                    mgr_matrix: List[Dict[str, Any]] = []
+                    mgr_r_totals: Dict[str, float] = {rn: 0.0 for rn in r_names_m}
+
+                    for qn in q_names_mgr:
+                        row_d = {"البند": qn}
+                        for rn in r_names_m:
+                            v_m = round_half_up_2(float(rater_cols_mgr[rn].get(qn) or 0.0))
+                            row_d[rn] = v_m
+                            mgr_r_totals[rn] = round_half_up_2(mgr_r_totals[rn] + v_m)
+                        mgr_matrix.append(row_d)
+
+                    grand_tot_m = round_half_up_2(sum(mgr_r_totals.values()))
+                    tot_row_m: Dict[str, Any] = {"البند": "الإجمالي"}
+                    for rn in r_names_m:
+                        tot_row_m[rn] = mgr_r_totals[rn]
+                    mgr_matrix.append(tot_row_m)
+
+                    st.dataframe(mgr_matrix, use_container_width=True, hide_index=True)
+                    st.metric("الإجمالي الكلي", f"{grand_tot_m:g}")
+
+                    m_hdr_h = "".join(f"<th>{ck}</th>" for ck in mgr_matrix[0].keys())
+                    m_bdy_h = "".join("<tr>" + "".join(f"<td>{ro[ck]}</td>" for ck in mgr_matrix[0].keys()) + "</tr>" for ro in mgr_matrix)
+                    m_doc_j = json.dumps(
+                        f"<!DOCTYPE html><html dir='rtl' lang='ar'><head><meta charset='utf-8'><title>تقرير تقييم المدير المباشر</title>"
+                        "<style>body{font-family:'Cairo',Tahoma,sans-serif;direction:rtl;margin:28px;}table{width:100%;border-collapse:collapse;}th,td{border:1px solid #334155;padding:10px;text-align:center;}th{background:#f1f5f9;}</style>"
+                        f"</head><body><h3>تقرير تقييم المدير المباشر: {picked_mgr_obj.get('name_ar')} | الإجمالي الكلي: {grand_tot_m:g}</h3><table><thead><tr>{m_hdr_h}</tr></thead><tbody>{m_bdy_h}</tbody></table></body></html>"
+                    )
+                    mc_1, mc_2 = st.columns([1.5, 1.5])
+                    with mc_1:
+                        st.components.v1.html(
+                            f"""<div style="direction:rtl;text-align:right;"><button onclick="var w=window.open('','_blank','width=950,height=700');w.document.write({m_doc_j});w.document.close();w.focus();setTimeout(function(){{w.print();}},300);" style="background:#0f4c5c;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-family:'Cairo',sans-serif;font-size:14px;font-weight:700;cursor:pointer;">🖨️ طباعة في ورقة مستقلة</button></div>""",
+                            height=50,
                         )
+                    with mc_2:
+                        m_pdf_b = _build_simple_pdf_bytes("Direct Manager KPI Report", [f"Manager: {picked_mgr_obj.get('employee_no', '')}", f"Grand Total: {grand_tot_m:g}"])
+                        st.download_button("📄 تصدير PDF", data=m_pdf_b, file_name="kpi_manager_report.pdf", mime="application/pdf", key="dl_mgr_rep_pdf")
+
+        # 5) تقرير تقييم المدير العام (بدون فلتر لأنه مدير عام واحد)
+        with gm_tabs[4]:
+            st.markdown("#### تقرير تقييم المدير العام")
+            gm_qs = peer_q_by_target.get("gm") or []
+            q_names_gm = [str(x.get("question") or "") for x in gm_qs if str(x.get("question") or "").strip()]
+
+            rater_cols_gm: Dict[str, Dict[str, float]] = {}
+            rater_counter_g = 0
+            for ev in kpi_evaluations:
+                lbl_e = str(ev.get("period_label") or "")
+                st_e = str(ev.get("status") or "").strip().lower()
+                if "تقييم مدير عام" not in lbl_e and st_e != "peer_gm_evaluated":
+                    continue
+                rater_counter_g += 1
+                r_emp = emp_by_any_id.get(str(ev.get("manager_id") or ""))
+                r_disp_name = f"موظف {rater_counter_g} ({r_emp.get('name_ar')})" if r_emp else f"موظف {rater_counter_g}"
+                sc_d = ev.get("manager_scores") or {}
+                if isinstance(sc_d, dict) and r_disp_name not in rater_cols_gm:
+                    rater_cols_gm[r_disp_name] = {str(k): float(v or 0.0) for k, v in sc_d.items()}
+                    for ks in sc_d.keys():
+                        if str(ks) not in q_names_gm:
+                            q_names_gm.append(str(ks))
+
+            if not rater_cols_gm:
+                st.info("لا توجد تقييمات مسجلة من الموظفين للمدير العام بعد.")
+            else:
+                r_names_g = list(rater_cols_gm.keys())
+                gm_matrix: List[Dict[str, Any]] = []
+                gm_r_totals: Dict[str, float] = {rn: 0.0 for rn in r_names_g}
+
+                for qn in q_names_gm:
+                    row_d = {"البند": qn}
+                    for rn in r_names_g:
+                        v_g = round_half_up_2(float(rater_cols_gm[rn].get(qn) or 0.0))
+                        row_d[rn] = v_g
+                        gm_r_totals[rn] = round_half_up_2(gm_r_totals[rn] + v_g)
+                    gm_matrix.append(row_d)
+
+                grand_tot_g = round_half_up_2(sum(gm_r_totals.values()))
+                tot_row_g: Dict[str, Any] = {"البند": "الإجمالي"}
+                for rn in r_names_g:
+                    tot_row_g[rn] = gm_r_totals[rn]
+                gm_matrix.append(tot_row_g)
+
+                st.dataframe(gm_matrix, use_container_width=True, hide_index=True)
+                st.metric("الإجمالي الكلي", f"{grand_tot_g:g}")
+
+                g_hdr_h = "".join(f"<th>{ck}</th>" for ck in gm_matrix[0].keys())
+                g_bdy_h = "".join("<tr>" + "".join(f"<td>{ro[ck]}</td>" for ck in gm_matrix[0].keys()) + "</tr>" for ro in gm_matrix)
+                g_doc_j = json.dumps(
+                    f"<!DOCTYPE html><html dir='rtl' lang='ar'><head><meta charset='utf-8'><title>تقرير تقييم المدير العام</title>"
+                    "<style>body{font-family:'Cairo',Tahoma,sans-serif;direction:rtl;margin:28px;}table{width:100%;border-collapse:collapse;}th,td{border:1px solid #334155;padding:10px;text-align:center;}th{background:#f1f5f9;}</style>"
+                    f"</head><body><h3>تقرير تقييم المدير العام | الإجمالي الكلي: {grand_tot_g:g}</h3><table><thead><tr>{g_hdr_h}</tr></thead><tbody>{g_bdy_h}</tbody></table></body></html>"
+                )
+                gc_1, gc_2 = st.columns([1.5, 1.5])
+                with gc_1:
+                    st.components.v1.html(
+                        f"""<div style="direction:rtl;text-align:right;"><button onclick="var w=window.open('','_blank','width=950,height=700');w.document.write({g_doc_j});w.document.close();w.focus();setTimeout(function(){{w.print();}},300);" style="background:#0f4c5c;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-family:'Cairo',sans-serif;font-size:14px;font-weight:700;cursor:pointer;">🖨️ طباعة في ورقة مستقلة</button></div>""",
+                        height=50,
+                    )
+                with gc_2:
+                    g_pdf_b = _build_simple_pdf_bytes("GM KPI Report", [f"Grand Total: {grand_tot_g:g}"])
+                    st.download_button("📄 تصدير PDF", data=g_pdf_b, file_name="kpi_gm_report.pdf", mime="application/pdf", key="dl_gm_rep_pdf")
         return
 
-    # --- المستخدمون غير المدير العام ---
+    # --- المستخدمون غير المدير العام: تقييم نفسي + السينيور (إن وُجد) + تقييم الموظفين (للمدير المباشر) + المدير المباشر (إن لم يكن المدير العام) + المدير العام للجميع ---
     has_my_senior = bool(str(current_user.get("senior_id") or "").strip())
     my_mgr_id_str = str(current_user.get("direct_manager_id") or "").strip()
     my_mgr_emp = emp_by_any_id.get(my_mgr_id_str)
@@ -3478,8 +3567,7 @@ def render_kpis_module(
         user_sub_tabs.append("👥 تقييم الموظفين")
     if not mgr_is_gm and my_mgr_emp:
         user_sub_tabs.append("👔 تقييم المدير المباشر")
-    if mgr_is_gm or user_role == "manager":
-        user_sub_tabs.append("🏢 تقييم المدير العام")
+    user_sub_tabs.append("🏢 تقييم المدير العام")
 
     sub_tabs = st.tabs(user_sub_tabs)
     st_idx = 0
@@ -3605,7 +3693,7 @@ def render_kpis_module(
                     st.rerun()
         st_idx += 1
 
-    # 3) تقييم الموظفين (للمدير المباشر: اختيار الاسم فقط -> تحديد الأسئلة تلقائياً حسب المسمى الوظيفي للموظف)
+    # 3) تقييم الموظفين (للمدير المباشر: اختيار الاسم فقط -> الأسئلة تلقائياً حسب المسمى الوظيفي للموظف)
     if user_role == "manager":
         with sub_tabs[st_idx]:
             st.markdown("#### تقييم الموظفين التابعين")
@@ -3617,7 +3705,7 @@ def render_kpis_module(
                 sel_sub_lbl = st.selectbox("اختر الموظف", list(sub_map.keys()), key="mgr_rate_sub_emp_sel")
                 picked_sub_emp = sub_map[sel_sub_lbl]
                 auto_sub_cat = _map_job_title_to_self_tab(picked_sub_emp)
-                st.caption(f"الموظف: **{picked_sub_emp.get('name_ar')}** — الأسئلة المرتبطة تلقائياً: **`{auto_sub_cat}`**")
+                st.caption(f"الموظف: **{picked_sub_emp.get('name_ar')}** — الفئة المرتبطة: **`{auto_sub_cat}`**")
 
                 sub_q_items = self_q_by_tab.get(auto_sub_cat) or []
                 max_sub_pts = round_half_up_2(sum(float(item.get("points") or 0) for item in sub_q_items))
@@ -3714,52 +3802,51 @@ def render_kpis_module(
                 st.rerun()
         st_idx += 1
 
-    # 5) تقييم المدير العام (يظهر للمدير المباشر أو لمن مديره المباشر هو المدير العام)
-    if mgr_is_gm or user_role == "manager":
-        with sub_tabs[st_idx]:
-            gm_emp = next((e for e in employees if str(e.get("role") or "").lower() == "general_manager"), None)
-            gm_target_id = gm_emp["id"] if gm_emp else None
-            gm_name = gm_emp.get("name_ar") if gm_emp else "المدير العام"
+    # 5) تقييم المدير العام (مفتوح لكل الموظفين بمختلف فئاتهم وأدوارهم)
+    with sub_tabs[st_idx]:
+        gm_emp = next((e for e in employees if str(e.get("role") or "").lower() == "general_manager"), None)
+        gm_target_id = gm_emp["id"] if gm_emp else None
+        gm_name = gm_emp.get("name_ar") if gm_emp else "المدير العام"
 
-            st.markdown(f"#### تقييم المدير العام: **{gm_name}**")
-            gm_qs = peer_q_by_target.get("gm") or []
-            max_gm_pts = round_half_up_2(sum(float(item.get("points") or 0) for item in gm_qs))
-            gm_scores_val: Dict[str, float] = {}
-            for idx_g, item_g in enumerate(gm_qs):
-                q_g = str(item_g.get("question") or "")
-                pts_g = max(0.5, float(item_g.get("points") or 10.0))
-                gm_scores_val[q_g] = float(
-                    st.slider(
-                        f"{q_g} (الدرجة القصوى: {pts_g:g})",
-                        min_value=0.0,
-                        max_value=float(pts_g),
-                        value=float(min(pts_g, round_half_up_2(pts_g * 0.8))),
-                        step=0.5,
-                        key=f"kpi_rate_gm_{user_id}_{idx_g}",
-                    )
+        st.markdown(f"#### تقييم المدير العام: **{gm_name}**")
+        gm_qs = peer_q_by_target.get("gm") or []
+        max_gm_pts = round_half_up_2(sum(float(item.get("points") or 0) for item in gm_qs))
+        gm_scores_val: Dict[str, float] = {}
+        for idx_g, item_g in enumerate(gm_qs):
+            q_g = str(item_g.get("question") or "")
+            pts_g = max(0.5, float(item_g.get("points") or 10.0))
+            gm_scores_val[q_g] = float(
+                st.slider(
+                    f"{q_g} (الدرجة القصوى: {pts_g:g})",
+                    min_value=0.0,
+                    max_value=float(pts_g),
+                    value=float(min(pts_g, round_half_up_2(pts_g * 0.8))),
+                    step=0.5,
+                    key=f"kpi_rate_gm_{user_id}_{idx_g}",
                 )
-            gm_tot = round_half_up_2(sum(gm_scores_val.values()))
-            gm_pct = round_half_up_2((gm_tot / max_gm_pts) * 100.0) if max_gm_pts > 0 else 0.0
-            gm1, gm2 = st.columns(2)
-            gm1.metric("مجموع الدرجات", f"{gm_tot:g} / {max_gm_pts:g}")
-            gm2.metric("النسبة المئوية", f"{gm_pct:g}%")
-            if st.button("💾 حفظ تقييم المدير العام", type="primary", key="save_kpi_rate_gm_btn") and gm_target_id:
-                upsert_record(
-                    "kpi_evaluations",
-                    {
-                        "employee_id": gm_target_id,
-                        "manager_id": user_id,
-                        "period_label": f"{period_lbl} | تقييم مدير عام بواسطة {current_user.get('name_ar')}",
-                        "period_start": kpi_start_dt.isoformat(),
-                        "period_end": kpi_end_dt.isoformat(),
-                        "manager_scores": gm_scores_val,
-                        "manager_percentage": gm_pct,
-                        "status": "peer_gm_evaluated",
-                    },
-                    on_conflict="employee_id,period_label",
-                )
-                st.success("✅ تم حفظ تقييم المدير العام بنجاح.")
-                st.rerun()
+            )
+        gm_tot = round_half_up_2(sum(gm_scores_val.values()))
+        gm_pct = round_half_up_2((gm_tot / max_gm_pts) * 100.0) if max_gm_pts > 0 else 0.0
+        gm1, gm2 = st.columns(2)
+        gm1.metric("مجموع الدرجات", f"{gm_tot:g} / {max_gm_pts:g}")
+        gm2.metric("النسبة المئوية", f"{gm_pct:g}%")
+        if st.button("💾 حفظ تقييم المدير العام", type="primary", key="save_kpi_rate_gm_btn") and gm_target_id:
+            upsert_record(
+                "kpi_evaluations",
+                {
+                    "employee_id": gm_target_id,
+                    "manager_id": user_id,
+                    "period_label": f"{period_lbl} | تقييم مدير عام بواسطة {current_user.get('name_ar')}",
+                    "period_start": kpi_start_dt.isoformat(),
+                    "period_end": kpi_end_dt.isoformat(),
+                    "manager_scores": gm_scores_val,
+                    "manager_percentage": gm_pct,
+                    "status": "peer_gm_evaluated",
+                },
+                on_conflict="employee_id,period_label",
+            )
+            st.success("✅ تم حفظ تقييم المدير العام بنجاح.")
+            st.rerun()
 
 
 # =====================================================================
