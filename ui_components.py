@@ -53,6 +53,102 @@ DEFAULT_FIXED_ALLOWANCE_TYPES: List[str] = [
     "مواصلات",
 ]
 
+KPI_JOB_CATEGORIES: List[str] = [
+    "استقبال بس",
+    "استقبال وسحب عينات",
+    "كول سنتر",
+    "كيميائيين",
+    "كيميائي وسينيور",
+    "مدير ومدير فروع",
+]
+
+DEFAULT_KPI_CATEGORY_QUESTIONS: Dict[str, Dict[str, List[str]]] = {
+    "استقبال بس": {
+        "work": [
+            "سرعة ودقة استقبال المرضى وتسجيل البيانات",
+            "وضوح شرح التعليمات والنتائج للمراجعين",
+            "الالتزام بالمواعيد والانضباط في فرع الاستقبال",
+        ],
+        "admin": [
+            "الالتزام بالسياسات والتعليمات الإدارية للمعمل",
+            "حسن التعامل وحل الشكاوى بهدوء ومهنية",
+        ],
+    },
+    "استقبال وسحب عينات": {
+        "work": [
+            "دقة تسجيل العينات وسلامة تطبيق معايير سحبها",
+            "الالتزام بالوقاية والسلامة المهنية أثناء السحب",
+            "السرعة والدقة في التعامل مع ضغط العمل",
+        ],
+        "admin": [
+            "الالتزام بالمواعيد والتعليمات الإدارية",
+            "التعاون والتنسيق مع فريق المعمل",
+        ],
+    },
+    "كول سنتر": {
+        "work": [
+            "سرعة الرد واللباقة في التعامل مع المتصلين",
+            "دقة تسجيل الاستفسارات والحجوزات وتحويلها",
+            "الالتزام بمواعيد العمل ونسب الإنجاز اليومية",
+        ],
+        "admin": [
+            "الالتزام باللوائح والتعليمات الإدارية",
+            "التعاون والعمل الجماعي داخل الفريق",
+        ],
+    },
+    "كيميائيين": {
+        "work": [
+            "دقة التحاليل ومراجعة النتائج وفق المعايير الفنية",
+            "الالتزام بجودة التشغيل ومراقبة الجودة (QC)",
+            "الالتزام بالمواعيد والانضباط داخل المعمل",
+        ],
+        "admin": [
+            "الالتزام بالسياسات والتعليمات الإدارية",
+            "التعاون والعمل الجماعي وحل المشكلات الفنية",
+        ],
+    },
+    "كيميائي وسينيور": {
+        "work": [
+            "دقة التحاليل والمراجعة الفنية النهائية للنتائج",
+            "متابعة سير العمل اليومي وضبط جودة الأداء",
+        ],
+        "admin": [
+            "توجيه وتدريب فريق العمل ومتابعة انضباطهم",
+            "الالتزام بالسياسات الإدارية ورفع التقارير بدقة",
+            "القيادة والمرونة في إدارة ضغط العمل",
+        ],
+    },
+    "مدير ومدير فروع": {
+        "work": [
+            "تحقيق مستهدفات الأداء وجودة الخدمات بالفرع",
+            "متابعة الحضور والانصراف وسير العمليات اليومية",
+        ],
+        "admin": [
+            "إدارة وتطوير فريق العمل وتوزيع المهام بكفاءة",
+            "الالتزام بالسياسات واللوائح الإدارية والرقابية",
+            "اتخاذ القرارات وحل المشكلات بسرعة وفاعلية",
+        ],
+    },
+}
+
+DEFAULT_KPI_PEER_QUESTIONS: Dict[str, List[str]] = {
+    "senior": [
+        "وضوح التوجيه والمتابعة اليومية من السينيور",
+        "سرعة الاستجابة والدعم الفني والإداري عند الحاجة",
+        "العدالة والموضوعية في التعامل مع الفريق",
+    ],
+    "manager": [
+        "وضوح التعليمات والأهداف من المدير المباشر",
+        "السرعة والفاعلية في حل المشكلات ومتابعة العمل",
+        "العدالة والمهنية في إدارة الفريق وتقييم الأداء",
+    ],
+    "gm": [
+        "وضوح الرؤية والتوجيهات الإدارية للمدير العام",
+        "دعم بيئة العمل وتوفير الموارد اللازمة للأداء",
+        "الشفافية والحزم في تطبيق السياسات واللوائح",
+    ],
+}
+
 
 def _get_fixed_allowance_types(org_settings: Dict[str, Any]) -> List[str]:
     """إرجاع قائمة أنواع المكافآت الثابتة المتاحة (الافتراضية + المضافة من المستخدم)."""
@@ -64,6 +160,61 @@ def _get_fixed_allowance_types(org_settings: Dict[str, Any]) -> List[str]:
             if lbl and lbl not in merged:
                 merged.append(lbl)
     return merged
+
+
+def _get_kpi_category_questions(org_settings: Dict[str, Any]) -> Dict[str, Dict[str, List[str]]]:
+    """إرجاع خريطة الأسئلة لكل فئة وظيفية (شغل + إدارة)."""
+    out: Dict[str, Dict[str, List[str]]] = {}
+    saved_map = org_settings.get("kpi_category_questions")
+    for cat in KPI_JOB_CATEGORIES:
+        base_cat = DEFAULT_KPI_CATEGORY_QUESTIONS.get(cat, {"work": [], "admin": []})
+        if isinstance(saved_map, dict) and isinstance(saved_map.get(cat), dict):
+            w_list = [str(q).strip() for q in (saved_map[cat].get("work") or []) if str(q).strip()]
+            a_list = [str(q).strip() for q in (saved_map[cat].get("admin") or []) if str(q).strip()]
+            out[cat] = {
+                "work": w_list if w_list else list(base_cat["work"]),
+                "admin": a_list if a_list else list(base_cat["admin"]),
+            }
+        else:
+            out[cat] = {
+                "work": list(base_cat["work"]),
+                "admin": list(base_cat["admin"]),
+            }
+    return out
+
+
+def _get_kpi_peer_questions(org_settings: Dict[str, Any]) -> Dict[str, List[str]]:
+    """إرجاع الأسئلة المستقلة لتقييم السينيور والمدير المباشر والمدير العام."""
+    out: Dict[str, List[str]] = {}
+    saved_peer = org_settings.get("kpi_peer_questions")
+    for key_p in ("senior", "manager", "gm"):
+        base_q = DEFAULT_KPI_PEER_QUESTIONS.get(key_p, [])
+        if isinstance(saved_peer, dict) and isinstance(saved_peer.get(key_p), list):
+            q_clean = [str(q).strip() for q in saved_peer[key_p] if str(q).strip()]
+            out[key_p] = q_clean if q_clean else list(base_q)
+        else:
+            out[key_p] = list(base_q)
+    return out
+
+
+def _detect_employee_kpi_category(emp: Dict[str, Any]) -> str:
+    """تحديد الفئة الوظيفية الأقرب للموظف تلقائياً من المسمى الوظيفي أو الدور."""
+    jt = str(emp.get("job_title") or "").strip().lower()
+    role = str(emp.get("role") or "").strip().lower()
+
+    if role in ("manager", "general_manager") or "مدير" in jt or "فرع" in jt:
+        return "مدير ومدير فروع"
+    if "كول" in jt or "call" in jt:
+        return "كول سنتر"
+    if role == "senior" or ("سينيور" in jt or "senior" in jt):
+        return "كيميائي وسينيور"
+    if "كيميائ" in jt or "تحاليل" in jt or "مختبر" in jt or "معمل" in jt:
+        return "كيميائيين"
+    if "سحب" in jt:
+        return "استقبال وسحب عينات"
+    if "استقبال" in jt:
+        return "استقبال بس"
+    return "استقبال بس"
 
 
 def _dept_map(departments: List[Dict[str, Any]]) -> Dict[str, str]:
@@ -2278,7 +2429,6 @@ def render_attendance_and_payroll(
                 st.info("لا توجد سجلات وقت إضافي مطابقة للفلاتر المختارة.")
         t_idx += 1
 
-    # --- 4) شيت المرتب (لجميع الموظفين — يُظهر كل مكافأة ثابتة قيمتها > 0 باسمها المفصل) ---
     with tabs[t_idx]:
         st.markdown("#### 💵 شيت المرتب الشهري الخاص بي")
         my_pay_ym = st.text_input("شهر المرتب (YYYY-MM)", value=date.today().strftime("%Y-%m"), key="my_pay_sheet_ym")
@@ -2347,7 +2497,6 @@ def render_attendance_and_payroll(
         st.markdown(pay_card_html, unsafe_allow_html=True)
     t_idx += 1
 
-    # --- 5) شيت المرتبات (للمدير العام و HR ورئيس مجلس الإدارة فقط — عمود واحد مجمّع باسم مكافأة ثابتة) ---
     if can_view_all_payroll_sheet and t_idx < len(tabs):
         with tabs[t_idx]:
             st.markdown("#### 📊 شيت المرتبات الشهري والأرشيف")
@@ -2497,9 +2646,90 @@ def render_attendance_and_payroll(
 
 
 # =====================================================================
-# 6. التقييم (KPIs نصف سنوي وسنوي + ملخص الأداء الآلي) والتقارير
+# 6. التقارير المستقلة (في القائمة الرئيسية تحت البصمة والـ Payroll)
 # =====================================================================
-def render_kpis_and_reports(
+def render_reports_module(
+    current_user: Dict[str, Any],
+    employees: List[Dict[str, Any]],
+    leave_requests: List[Dict[str, Any]],
+    attendance_logs: List[Dict[str, Any]],
+    penalties_rewards: List[Dict[str, Any]],
+    advances: List[Dict[str, Any]],
+    kpi_evaluations: List[Dict[str, Any]],
+) -> None:
+    st.markdown("### 📑 التقارير التفصيلية")
+    emp_by_id = {str(e["id"]): e for e in employees if e.get("id")}
+
+    rep_type = st.selectbox(
+        "اختر نوع التقرير",
+        ["تقرير الجزاءات الشهري", "تقرير المكافآت الشهري", "تقرير الإجازات الشهري", "تقرير شامل لموظف محدد"],
+        key="main_rep_type_sel",
+    )
+    rep_ym = st.text_input("الشهر (YYYY-MM)", value=date.today().strftime("%Y-%m"), key="main_rep_ym_inp")
+
+    if rep_type == "تقرير الجزاءات الشهري":
+        rows = [
+            {
+                "الموظف": emp_by_id.get(str(p.get("employee_id") or ""), {}).get("name_ar", ""),
+                "التاريخ": str(p.get("issue_date") or "")[:10],
+                "القيمة": p.get("calculated_amount"),
+                "العنوان": p.get("title"),
+                "السبب": p.get("reason"),
+                "الحالة": p.get("status"),
+            }
+            for p in penalties_rewards
+            if p.get("entry_type") == "penalty" and str(p.get("payroll_month") or "")[:7] == rep_ym[:7]
+        ]
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+
+    elif rep_type == "تقرير المكافآت الشهري":
+        rows = [
+            {
+                "الموظف": emp_by_id.get(str(p.get("employee_id") or ""), {}).get("name_ar", ""),
+                "التاريخ": str(p.get("issue_date") or "")[:10],
+                "القيمة": p.get("calculated_amount"),
+                "العنوان": p.get("title"),
+                "السبب": p.get("reason"),
+                "الحالة": p.get("status"),
+            }
+            for p in penalties_rewards
+            if p.get("entry_type") == "reward" and str(p.get("payroll_month") or "")[:7] == rep_ym[:7]
+        ]
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+
+    elif rep_type == "تقرير الإجازات الشهري":
+        rows = [
+            {
+                "الموظف": lr.get("employee_name"),
+                "النوع": lr.get("type_name"),
+                "من": str(lr.get("start_date"))[:10],
+                "إلى": str(lr.get("end_date"))[:10],
+                "الأيام": lr.get("days"),
+                "الحالة": lr.get("status"),
+            }
+            for lr in leave_requests
+            if str(lr.get("start_date") or "")[:7] == rep_ym[:7]
+        ]
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+
+    else:
+        emp_map = {f"{e.get('name_ar')} (#{e.get('employee_no')})": e for e in employees}
+        if emp_map:
+            sel_e = st.selectbox("اختر الموظف", list(emp_map.keys()), key="main_rep_emp_sel")
+            e_obj = emp_map[sel_e]
+            eid_str = str(e_obj["id"])
+            st.write("#### الإجازات")
+            st.dataframe([lr for lr in leave_requests if str(lr.get("employee_id")) == eid_str], use_container_width=True, hide_index=True)
+            st.write("#### الجزاءات والمكافآت")
+            st.dataframe([pr for pr in penalties_rewards if str(pr.get("employee_id")) == eid_str], use_container_width=True, hide_index=True)
+            st.write("#### السلف")
+            st.dataframe([adv for adv in advances if str(adv.get("employee_id")) == eid_str], use_container_width=True, hide_index=True)
+
+
+# =====================================================================
+# 7. شاشة الـ KPIs (تقييم نفسي حسب الفئة + السينيور + المدير المباشر + المدير العام بشريط 0.5)
+# =====================================================================
+def render_kpis_module(
     current_user: Dict[str, Any],
     employees: List[Dict[str, Any]],
     leave_requests: List[Dict[str, Any]],
@@ -2509,203 +2739,263 @@ def render_kpis_and_reports(
     kpi_evaluations: List[Dict[str, Any]],
     org_settings: Dict[str, Any],
 ) -> None:
-    st.markdown("### 📈 تقييم الأداء (KPIs) والتقارير التفصيلية")
-    perms = get_effective_permissions(current_user)
+    st.markdown("### 🎯 تقييم الأداء (KPIs)")
     user_id = str(current_user.get("id"))
-    user_role = (current_user.get("role") or "employee").lower()
-    emp_by_id = {str(e["id"]): e for e in employees if e.get("id")}
+    my_ids = _emp_identifiers(current_user)
+    user_role = (current_user.get("role") or "employee").strip().lower()
+    emp_by_any_id: Dict[str, Dict[str, Any]] = {}
+    for e in employees:
+        for k in _emp_identifiers(e):
+            emp_by_any_id[k] = e
 
-    criteria_items = [
-        "الالتزام بالمواعيد والانضباط الوظيفي",
-        "جودة ودقة تنفيذ المهام اليومية",
-        "التعاون والعمل الجماعي داخل الفريق",
-        "الالتزام بالسياسات والتعليمات الإدارية",
-        "المبادرة وسرعة الإنجاز تحت الضغط",
-    ]
+    kpi_active = bool(org_settings.get("kpi_evaluation_active", False))
+    eval_cycle_type = str(org_settings.get("kpi_cycle_type") or "نصف سنوي")
+    kpi_start_dt_str = str(org_settings.get("kpi_start_date") or date.today().isoformat())[:10]
+    period_lbl = f"{eval_cycle_type} — يبدأ من {kpi_start_dt_str}"
 
-    tab_kpi, tab_rep = st.tabs(["🎯 تقييم الـ KPIs (نصف سنوي / سنوي)", "📑 التقارير"])
+    if not kpi_active and user_role not in ("general_manager", "hr"):
+        st.warning("فترة تقييم الأداء (KPIs) غير مفعّلة حالياً.")
+        return
 
-    with tab_kpi:
-        kpi_active = bool(org_settings.get("kpi_evaluation_active", False))
-        period_lbl = str(org_settings.get("kpi_period_label") or "نصف سنوي 2026")
+    st.caption(f"فترة التقييم الحالية: **{eval_cycle_type}** | تاريخ البداية: **`{kpi_start_dt_str}`**")
 
-        if perms.get("manage_settings") or user_role == "general_manager":
-            with st.expander("⚙️ التحكم في تفعيل فترة التقييم (نصف سنوي / سنوي)", expanded=True):
-                c1, c2, c3 = st.columns([2, 2, 1])
-                new_lbl = c1.text_input("مسمى فترة التقييم", value=period_lbl)
-                new_act = c2.checkbox("تفعيل أيقونة التقييم للموظفين الآن", value=kpi_active)
-                if c3.button("حفظ", key="save_kpi_toggle"):
-                    update_record("org_settings", "main", {
-                        "kpi_period_label": new_lbl.strip() or period_lbl,
-                        "kpi_evaluation_active": bool(new_act),
-                    })
-                    st.rerun()
+    cat_questions_map = _get_kpi_category_questions(org_settings)
+    peer_questions_map = _get_kpi_peer_questions(org_settings)
 
-        if not kpi_active and user_role not in ("general_manager", "hr"):
-            st.warning("فترة تقييم الأداء (KPIs) غير مفعّلة حالياً.")
+    detected_cat = _detect_employee_kpi_category(current_user)
+    sel_cat = st.selectbox(
+        "فئة الموظف للتقييم الذاتي",
+        KPI_JOB_CATEGORIES,
+        index=KPI_JOB_CATEGORIES.index(detected_cat) if detected_cat in KPI_JOB_CATEGORIES else 0,
+        key="kpi_user_cat_sel",
+    )
+
+    p_col1, p_col2 = st.columns(2)
+    p_start = p_col1.date_input("من تاريخ (لفترة السجل الآلي)", value=parse_date_safe(kpi_start_dt_str) or date(date.today().year, 1, 1), key="kpi_auto_from")
+    p_end = p_col2.date_input("إلى تاريخ", value=date.today(), key="kpi_auto_to")
+
+    sub_tabs = st.tabs([
+        "🙋 تقييم نفسي",
+        "👨‍🔬 تقييم السينيور",
+        "👔 تقييم المدير المباشر",
+        "🏢 تقييم المدير العام",
+    ])
+
+    # --- 1) تقييم نفسي ---
+    with sub_tabs[0]:
+        st.markdown(f"#### التقييم الذاتي — الفئة: **{sel_cat}**")
+        work_qs = cat_questions_map.get(sel_cat, {}).get("work") or []
+        admin_qs = cat_questions_map.get(sel_cat, {}).get("admin") or []
+        all_self_qs = [("شغل", q) for q in work_qs] + [("إدارة", q) for q in admin_qs]
+
+        max_per_q = round_half_up_2(100.0 / max(1, len(all_self_qs)))
+        self_scores: Dict[str, float] = {}
+
+        if work_qs:
+            st.markdown("##### 🧪 أسئلة للشغل")
+            for idx_w, q_w in enumerate(work_qs):
+                def_v = min(max_per_q, 10.0)
+                val_w = st.slider(
+                    q_w,
+                    min_value=0.0,
+                    max_value=float(max_per_q),
+                    value=float(def_v),
+                    step=0.5,
+                    key=f"kpi_self_w_{user_id}_{sel_cat}_{idx_w}",
+                )
+                self_scores[f"[شغل] {q_w}"] = float(val_w)
+
+        if admin_qs:
+            st.markdown("##### 📋 أسئلة للإدارة")
+            for idx_a, q_a in enumerate(admin_qs):
+                def_v = min(max_per_q, 10.0)
+                val_a = st.slider(
+                    q_a,
+                    min_value=0.0,
+                    max_value=float(max_per_q),
+                    value=float(def_v),
+                    step=0.5,
+                    key=f"kpi_self_a_{user_id}_{sel_cat}_{idx_a}",
+                )
+                self_scores[f"[إدارة] {q_a}"] = float(val_a)
+
+        self_total = round_half_up_2(sum(self_scores.values()))
+        st.metric("مجموع التقييم الذاتي", f"{self_total:g}")
+
+        st.divider()
+        st.markdown("##### 📊 ملخص الأداء الآلي للفترة")
+        auto_sum = build_employee_period_summary(
+            employee=current_user,
+            start_date=p_start,
+            end_date=p_end,
+            leave_requests=leave_requests,
+            attendance_logs=attendance_logs,
+            penalties_rewards=penalties_rewards,
+            advances=advances,
+        )
+        s1, s2, s3, s4, s5, s6 = st.columns(6)
+        s1.metric("أيام الإجازات", auto_sum["approved_leaves_days"])
+        s2.metric("مرات التأخير", auto_sum["late_days_count"])
+        s3.metric("دقائق التأخير", auto_sum["total_late_minutes"])
+        s4.metric("إضافي معتمد (د)", auto_sum["approved_overtime_minutes"])
+        s5.metric("المكافآت", f"{auto_sum['total_rewards']} ج")
+        s6.metric("الجزاءات / السلف", f"{auto_sum['total_penalties']} / {auto_sum['total_advances']} ج")
+
+        if st.button("💾 حفظ التقييم الذاتي", type="primary", key="save_kpi_self_btn"):
+            upsert_record(
+                "kpi_evaluations",
+                {
+                    "employee_id": current_user["id"],
+                    "manager_id": user_id,
+                    "period_label": f"{period_lbl} | ذاتي ({sel_cat})",
+                    "period_start": p_start.isoformat(),
+                    "period_end": p_end.isoformat(),
+                    "self_scores": self_scores,
+                    "self_percentage": self_total,
+                    "auto_summary": auto_sum,
+                    "status": "submitted_by_employee",
+                },
+                on_conflict="employee_id,period_label",
+            )
+            write_audit_log(
+                "kpi_evaluations",
+                "save_kpi_self",
+                "تقييم",
+                f"حفظ تقييم ذاتي ({self_total:g}) للموظف {current_user.get('name_ar')} — فئة {sel_cat}",
+                by_name=current_user.get("name_ar", ""),
+                by_user_id=user_id,
+            )
+            st.success("✅ تم حفظ التقييم الذاتي بنجاح.")
+            st.rerun()
+
+    # --- 2) تقييم السينيور ---
+    with sub_tabs[1]:
+        sen_id_str = str(current_user.get("senior_id") or "").strip()
+        sen_emp = emp_by_any_id.get(sen_id_str)
+        if not sen_emp:
+            st.info("لا يوجد سينيور محدد لحسابك حالياً.")
         else:
-            target_choices = {
-                f"{e.get('name_ar')} (#{e.get('employee_no')})": e
-                for e in employees
-                if (e.get("status") or "active") == "active"
-            }
-            default_key = next(
-                (k for k, v in target_choices.items() if str(v["id"]) == user_id),
-                list(target_choices.keys())[0] if target_choices else "",
-            )
-            sel_target_lbl = st.selectbox(
-                "اختر الموظف للتقييم",
-                list(target_choices.keys()),
-                index=list(target_choices.keys()).index(default_key) if default_key in target_choices else 0,
-            )
-            target_emp = target_choices[sel_target_lbl]
-
-            p_col1, p_col2 = st.columns(2)
-            p_start = p_col1.date_input("من تاريخ (لفترة السجل الآلي)", value=date(date.today().year, 1, 1))
-            p_end = p_col2.date_input("إلى تاريخ", value=date.today())
-
-            col_self, col_mgr = st.columns(2)
-            self_scores: Dict[str, int] = {}
-            mgr_scores: Dict[str, int] = {}
-
-            with col_self:
-                st.markdown("#### تقييم الموظف لنفسه (من 100%)")
-                for idx, item in enumerate(criteria_items):
-                    self_scores[item] = st.slider(item, min_value=0, max_value=20, value=16, key=f"self_{target_emp['id']}_{idx}")
-                self_pct = round_half_up_2(sum(self_scores.values()))
-                st.metric("نسبة التقييم الذاتي", f"{self_pct}%")
-
-            with col_mgr:
-                st.markdown("#### تقييم المدير المباشر (من 100%)")
-                can_mgr_rate = perms.get("approve_penalties") or user_role in ("manager", "general_manager", "hr")
-                for idx, item in enumerate(criteria_items):
-                    mgr_scores[item] = st.slider(
-                        f"{item} (المدير)",
-                        min_value=0,
-                        max_value=20,
-                        value=16,
-                        disabled=not can_mgr_rate,
-                        key=f"mgr_{target_emp['id']}_{idx}",
+            st.markdown(f"#### تقييم السينيور: **{sen_emp.get('name_ar')}**")
+            sen_qs = peer_questions_map.get("senior") or []
+            max_s = round_half_up_2(100.0 / max(1, len(sen_qs)))
+            sen_scores: Dict[str, float] = {}
+            for idx_s, q_s in enumerate(sen_qs):
+                sen_scores[q_s] = float(
+                    st.slider(
+                        q_s,
+                        min_value=0.0,
+                        max_value=float(max_s),
+                        value=float(min(max_s, 10.0)),
+                        step=0.5,
+                        key=f"kpi_rate_sen_{user_id}_{sen_emp['id']}_{idx_s}",
                     )
-                mgr_pct = round_half_up_2(sum(mgr_scores.values()))
-                st.metric("نسبة تقييم المدير", f"{mgr_pct}%")
-
-            st.divider()
-            st.markdown("#### 📋 ملف الأداء التلقائي للموظف خلال الفترة المحددة")
-            auto_sum = build_employee_period_summary(
-                employee=target_emp,
-                start_date=p_start,
-                end_date=p_end,
-                leave_requests=leave_requests,
-                attendance_logs=attendance_logs,
-                penalties_rewards=penalties_rewards,
-                advances=advances,
-            )
-            s1, s2, s3, s4, s5, s6 = st.columns(6)
-            s1.metric("أيام الإجازات", auto_sum["approved_leaves_days"])
-            s2.metric("مرات التأخير", auto_sum["late_days_count"])
-            s3.metric("دقائق التأخير", auto_sum["total_late_minutes"])
-            s4.metric("إضافي معتمد (د)", auto_sum["approved_overtime_minutes"])
-            s5.metric("المكافآت", f"{auto_sum['total_rewards']} ج")
-            s6.metric("الجزاءات / السلف", f"{auto_sum['total_penalties']} / {auto_sum['total_advances']} ج")
-
-            if st.button("💾 حفظ التقييم والملخص", type="primary"):
+                )
+            sen_tot = round_half_up_2(sum(sen_scores.values()))
+            st.metric("إجمالي تقييم السينيور", f"{sen_tot:g}")
+            if st.button("💾 حفظ تقييم السينيور", type="primary", key="save_kpi_rate_sen_btn"):
                 upsert_record(
                     "kpi_evaluations",
                     {
-                        "employee_id": target_emp["id"],
+                        "employee_id": sen_emp["id"],
                         "manager_id": user_id,
-                        "period_label": f"{period_lbl} ({p_start.isoformat()} إلى {p_end.isoformat()})",
+                        "period_label": f"{period_lbl} | تقييم سينيور بواسطة {current_user.get('name_ar')}",
                         "period_start": p_start.isoformat(),
                         "period_end": p_end.isoformat(),
-                        "self_scores": self_scores,
-                        "self_percentage": self_pct,
-                        "manager_scores": mgr_scores,
-                        "manager_percentage": mgr_pct,
-                        "auto_summary": auto_sum,
-                        "status": "reviewed_by_manager" if can_mgr_rate else "submitted_by_employee",
+                        "manager_scores": sen_scores,
+                        "manager_percentage": sen_tot,
+                        "status": "peer_senior_evaluated",
                     },
                     on_conflict="employee_id,period_label",
                 )
-                write_audit_log(
-                    "kpi_evaluations",
-                    "save_kpi",
-                    "تقييم",
-                    f"حفظ تقييم KPI للموظف {target_emp.get('name_ar')} (ذاتي {self_pct}% / مدير {mgr_pct}%)",
-                    by_name=current_user.get("name_ar", ""),
-                    by_user_id=user_id,
-                )
-                st.success("✅ تم حفظ تقييم الـ KPI وملخص الأداء.")
+                st.success("✅ تم حفظ تقييم السينيور بنجاح.")
                 st.rerun()
 
-    with tab_rep:
-        rep_type = st.selectbox(
-            "اختر نوع التقرير",
-            ["تقرير الجزاءات الشهري", "تقرير المكافآت الشهري", "تقرير الإجازات الشهري", "تقرير شامل لموظف محدد"],
-        )
-        rep_ym = st.text_input("الشهر (YYYY-MM)", value=date.today().strftime("%Y-%m"), key="rep_ym_inp")
-
-        if rep_type == "تقرير الجزاءات الشهري":
-            rows = [
-                {
-                    "الموظف": emp_by_id.get(str(p.get("employee_id") or ""), {}).get("name_ar", ""),
-                    "التاريخ": str(p.get("issue_date") or "")[:10],
-                    "القيمة": p.get("calculated_amount"),
-                    "العنوان": p.get("title"),
-                    "السبب": p.get("reason"),
-                    "الحالة": p.get("status"),
-                }
-                for p in penalties_rewards
-                if p.get("entry_type") == "penalty" and str(p.get("payroll_month") or "")[:7] == rep_ym[:7]
-            ]
-            st.dataframe(rows, use_container_width=True, hide_index=True)
-
-        elif rep_type == "تقرير المكافآت الشهري":
-            rows = [
-                {
-                    "الموظف": emp_by_id.get(str(p.get("employee_id") or ""), {}).get("name_ar", ""),
-                    "التاريخ": str(p.get("issue_date") or "")[:10],
-                    "القيمة": p.get("calculated_amount"),
-                    "العنوان": p.get("title"),
-                    "السبب": p.get("reason"),
-                    "الحالة": p.get("status"),
-                }
-                for p in penalties_rewards
-                if p.get("entry_type") == "reward" and str(p.get("payroll_month") or "")[:7] == rep_ym[:7]
-            ]
-            st.dataframe(rows, use_container_width=True, hide_index=True)
-
-        elif rep_type == "تقرير الإجازات الشهري":
-            rows = [
-                {
-                    "الموظف": lr.get("employee_name"),
-                    "النوع": lr.get("type_name"),
-                    "من": str(lr.get("start_date"))[:10],
-                    "إلى": str(lr.get("end_date"))[:10],
-                    "الأيام": lr.get("days"),
-                    "الحالة": lr.get("status"),
-                }
-                for lr in leave_requests
-                if str(lr.get("start_date") or "")[:7] == rep_ym[:7]
-            ]
-            st.dataframe(rows, use_container_width=True, hide_index=True)
-
+    # --- 3) تقييم المدير المباشر ---
+    with sub_tabs[2]:
+        mgr_id_str = str(current_user.get("direct_manager_id") or "").strip()
+        mgr_emp = emp_by_any_id.get(mgr_id_str)
+        if not mgr_emp:
+            st.info("لا يوجد مدير مباشر محدد لحسابك حالياً.")
         else:
-            emp_map = {f"{e.get('name_ar')} (#{e.get('employee_no')})": e for e in employees}
-            if emp_map:
-                sel_e = st.selectbox("اختر الموظف", list(emp_map.keys()), key="rep_emp_sel")
-                e_obj = emp_map[sel_e]
-                eid_str = str(e_obj["id"])
-                st.write("#### الإجازات")
-                st.dataframe([lr for lr in leave_requests if str(lr.get("employee_id")) == eid_str], use_container_width=True, hide_index=True)
-                st.write("#### الجزاءات والمكافآت")
-                st.dataframe([pr for pr in penalties_rewards if str(pr.get("employee_id")) == eid_str], use_container_width=True, hide_index=True)
-                st.write("#### السلف")
-                st.dataframe([adv for adv in advances if str(adv.get("employee_id")) == eid_str], use_container_width=True, hide_index=True)
+            st.markdown(f"#### تقييم المدير المباشر: **{mgr_emp.get('name_ar')}**")
+            mgr_qs = peer_questions_map.get("manager") or []
+            max_m = round_half_up_2(100.0 / max(1, len(mgr_qs)))
+            mgr_scores_val: Dict[str, float] = {}
+            for idx_m, q_m in enumerate(mgr_qs):
+                mgr_scores_val[q_m] = float(
+                    st.slider(
+                        q_m,
+                        min_value=0.0,
+                        max_value=float(max_m),
+                        value=float(min(max_m, 10.0)),
+                        step=0.5,
+                        key=f"kpi_rate_mgr_{user_id}_{mgr_emp['id']}_{idx_m}",
+                    )
+                )
+            mgr_tot = round_half_up_2(sum(mgr_scores_val.values()))
+            st.metric("إجمالي تقييم المدير المباشر", f"{mgr_tot:g}")
+            if st.button("💾 حفظ تقييم المدير المباشر", type="primary", key="save_kpi_rate_mgr_btn"):
+                upsert_record(
+                    "kpi_evaluations",
+                    {
+                        "employee_id": mgr_emp["id"],
+                        "manager_id": user_id,
+                        "period_label": f"{period_lbl} | تقييم مدير مباشر بواسطة {current_user.get('name_ar')}",
+                        "period_start": p_start.isoformat(),
+                        "period_end": p_end.isoformat(),
+                        "manager_scores": mgr_scores_val,
+                        "manager_percentage": mgr_tot,
+                        "status": "peer_manager_evaluated",
+                    },
+                    on_conflict="employee_id,period_label",
+                )
+                st.success("✅ تم حفظ تقييم المدير المباشر بنجاح.")
+                st.rerun()
+
+    # --- 4) تقييم المدير العام ---
+    with sub_tabs[3]:
+        gm_emp = next((e for e in employees if str(e.get("role") or "").lower() == "general_manager"), None)
+        gm_target_id = gm_emp["id"] if gm_emp else None
+        gm_name = gm_emp.get("name_ar") if gm_emp else "المدير العام"
+
+        st.markdown(f"#### تقييم المدير العام: **{gm_name}**")
+        gm_qs = peer_questions_map.get("gm") or []
+        max_g = round_half_up_2(100.0 / max(1, len(gm_qs)))
+        gm_scores_val: Dict[str, float] = {}
+        for idx_g, q_g in enumerate(gm_qs):
+            gm_scores_val[q_g] = float(
+                st.slider(
+                    q_g,
+                    min_value=0.0,
+                    max_value=float(max_g),
+                    value=float(min(max_g, 10.0)),
+                    step=0.5,
+                    key=f"kpi_rate_gm_{user_id}_{idx_g}",
+                )
+            )
+        gm_tot = round_half_up_2(sum(gm_scores_val.values()))
+        st.metric("إجمالي تقييم المدير العام", f"{gm_tot:g}")
+        if st.button("💾 حفظ تقييم المدير العام", type="primary", key="save_kpi_rate_gm_btn") and gm_target_id:
+            upsert_record(
+                "kpi_evaluations",
+                {
+                    "employee_id": gm_target_id,
+                    "manager_id": user_id,
+                    "period_label": f"{period_lbl} | تقييم مدير عام بواسطة {current_user.get('name_ar')}",
+                    "period_start": p_start.isoformat(),
+                    "period_end": p_end.isoformat(),
+                    "manager_scores": gm_scores_val,
+                    "manager_percentage": gm_tot,
+                    "status": "peer_gm_evaluated",
+                },
+                on_conflict="employee_id,period_label",
+            )
+            st.success("✅ تم حفظ تقييم المدير العام بنجاح.")
+            st.rerun()
 
 
 # =====================================================================
-# 7. الموظفون والفروع والصلاحيات والإعدادات
+# 8. الموظفون والفروع والصلاحيات والإعدادات (شاملة إعدادات الـ KPIs والأسئلة المستقلة)
 # =====================================================================
 def render_admin_and_staff(
     current_user: Dict[str, Any],
@@ -2726,10 +3016,11 @@ def render_admin_and_staff(
         st.warning("هذا القسم مخصص للإدارة والموارد البشرية.")
         return
 
-    tab_emp, tab_org, tab_perms_hol = st.tabs([
+    tab_emp, tab_org, tab_perms_hol, tab_kpi_cfg = st.tabs([
         "👤 الموظفون وتعديل البيانات",
         "🏢 الفروع",
         "🔐 الصلاحيات والإعدادات",
+        "🎯 KPIs",
     ])
 
     with tab_emp:
@@ -3137,4 +3428,114 @@ def render_admin_and_staff(
                     "grace_early_minutes": int(g_early),
                 }, on_conflict="id")
                 st.success("✅ تم حفظ إعدادات النظام.")
+                st.rerun()
+
+    with tab_kpi_cfg:
+        st.markdown("#### ⚙️ إعدادات الـ KPIs والأسئلة")
+
+        cur_cycle_val = str(org_settings.get("kpi_cycle_type") or "نصف سنوي")
+        cur_start_dt = parse_date_safe(org_settings.get("kpi_start_date")) or date.today()
+        cur_active_val = bool(org_settings.get("kpi_evaluation_active", False))
+
+        kc1, kc2, kc3 = st.columns([2, 2, 1.5])
+        with kc1:
+            sel_cycle = st.selectbox(
+                "نوع التقييم",
+                ["نصف سنوي", "سنوي"],
+                index=0 if cur_cycle_val != "سنوي" else 1,
+                key="kpi_cfg_cycle_sel",
+            )
+        with kc2:
+            sel_kpi_start = st.date_input("تاريخ بداية التقييم", value=cur_start_dt, key="kpi_cfg_start_dt")
+        with kc3:
+            st.write("")
+            st.write("")
+            sel_kpi_active = st.checkbox("تفعيل التقييم", value=cur_active_val, key="kpi_cfg_active_chk")
+
+        if st.button("💾 حفظ إعدادات فترة التقييم", type="primary", key="save_kpi_cfg_period_btn"):
+            upsert_record(
+                "org_settings",
+                {
+                    "id": "main",
+                    "kpi_cycle_type": sel_cycle,
+                    "kpi_period_label": f"{sel_cycle} ({sel_kpi_start.isoformat()})",
+                    "kpi_start_date": sel_kpi_start.isoformat(),
+                    "kpi_evaluation_active": bool(sel_kpi_active),
+                },
+                on_conflict="id",
+            )
+            st.success("✅ تم حفظ إعدادات فترة التقييم.")
+            st.rerun()
+
+        st.divider()
+        st.markdown("#### 📌 أسئلة فئات الموظفين (التقييم الذاتي)")
+        cat_q_map = _get_kpi_category_questions(org_settings)
+        cfg_cat = st.selectbox("اختر الفئة الوظيفية", KPI_JOB_CATEGORIES, key="kpi_cfg_cat_sel")
+        cfg_sec = st.selectbox(
+            "القسم",
+            ["work", "admin"],
+            format_func=lambda x: "أسئلة للشغل" if x == "work" else "أسئلة للإدارة",
+            key="kpi_cfg_sec_sel",
+        )
+
+        cur_sec_qs = list(cat_q_map.get(cfg_cat, {}).get(cfg_sec) or [])
+        for idx_q, q_txt in enumerate(cur_sec_qs):
+            qc1, qc2 = st.columns([5, 1])
+            qc1.write(f"• {q_txt}")
+            if qc2.button("حذف", key=f"del_cat_q_{cfg_cat}_{cfg_sec}_{idx_q}"):
+                cur_sec_qs.pop(idx_q)
+                cat_q_map[cfg_cat][cfg_sec] = cur_sec_qs
+                upsert_record("org_settings", {"id": "main", "kpi_category_questions": cat_q_map}, on_conflict="id")
+                st.rerun()
+
+        with st.form("add_kpi_cat_q_form", clear_on_submit=True):
+            add_q_col1, add_q_col2 = st.columns([3.5, 1.2])
+            with add_q_col1:
+                new_cat_q = st.text_input("إضافة سؤال جديد للفئة المختارة", placeholder="اكتب نص السؤال")
+            with add_q_col2:
+                st.write("")
+                st.write("")
+                sub_cat_q = st.form_submit_button("➕ إضافة سؤال", type="primary")
+            if sub_cat_q and new_cat_q.strip():
+                cat_q_map[cfg_cat][cfg_sec] = cur_sec_qs + [new_cat_q.strip()]
+                upsert_record("org_settings", {"id": "main", "kpi_category_questions": cat_q_map}, on_conflict="id")
+                st.success("✅ تمت إضافة السؤال.")
+                st.rerun()
+
+        st.divider()
+        st.markdown("#### 🧑‍💼 الأسئلة المستقلة لتقييم السينيور والمدير المباشر والمدير العام")
+        peer_q_map = _get_kpi_peer_questions(org_settings)
+        peer_target_key = st.selectbox(
+            "اختر الجهة المستقلة",
+            ["senior", "manager", "gm"],
+            format_func=lambda x: {
+                "senior": "تقييم السينيور",
+                "manager": "تقييم المدير المباشر",
+                "gm": "تقييم المدير العام",
+            }[x],
+            key="kpi_cfg_peer_target_sel",
+        )
+
+        cur_peer_qs = list(peer_q_map.get(peer_target_key) or [])
+        for idx_pq, pq_txt in enumerate(cur_peer_qs):
+            pqc1, pqc2 = st.columns([5, 1])
+            pqc1.write(f"• {pq_txt}")
+            if pqc2.button("حذف", key=f"del_peer_q_{peer_target_key}_{idx_pq}"):
+                cur_peer_qs.pop(idx_pq)
+                peer_q_map[peer_target_key] = cur_peer_qs
+                upsert_record("org_settings", {"id": "main", "kpi_peer_questions": peer_q_map}, on_conflict="id")
+                st.rerun()
+
+        with st.form("add_kpi_peer_q_form", clear_on_submit=True):
+            apq1, apq2 = st.columns([3.5, 1.2])
+            with apq1:
+                new_peer_q = st.text_input("إضافة سؤال مستقل جديد", placeholder="اكتب نص السؤال المستقل")
+            with apq2:
+                st.write("")
+                st.write("")
+                sub_peer_q = st.form_submit_button("➕ إضافة سؤال مستقل", type="primary")
+            if sub_peer_q and new_peer_q.strip():
+                peer_q_map[peer_target_key] = cur_peer_qs + [new_peer_q.strip()]
+                upsert_record("org_settings", {"id": "main", "kpi_peer_questions": peer_q_map}, on_conflict="id")
+                st.success("✅ تمت إضافة السؤال المستقل.")
                 st.rerun()
