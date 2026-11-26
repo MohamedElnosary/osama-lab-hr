@@ -18,6 +18,7 @@ from payroll_engine import (
     calculate_penalty_or_reward_amount,
     compute_employee_monthly_payroll,
     evaluate_attendance_record,
+    extract_active_fixed_allowances,
     get_employee_monthly_advances_summary,
 )
 from rules_engine import (
@@ -44,6 +45,25 @@ EGYPT_OFFICIAL_HOLIDAYS: List[str] = [
     "عيد القوات المسلحة (6 أكتوبر)",
     "إجازة رسمية أخرى (مخصصة)",
 ]
+
+DEFAULT_FIXED_ALLOWANCE_TYPES: List[str] = [
+    "مكافأة ثابتة تحفيزية",
+    "مكافأة ثابتة للسينيور",
+    "مكافأة ثابتة للمدير المباشر",
+    "مواصلات",
+]
+
+
+def _get_fixed_allowance_types(org_settings: Dict[str, Any]) -> List[str]:
+    """إرجاع قائمة أنواع المكافآت الثابتة المتاحة (الافتراضية + المضافة من المستخدم)."""
+    merged: List[str] = list(DEFAULT_FIXED_ALLOWANCE_TYPES)
+    custom_list = org_settings.get("fixed_allowance_types")
+    if isinstance(custom_list, list):
+        for item in custom_list:
+            lbl = str(item or "").strip()
+            if lbl and lbl not in merged:
+                merged.append(lbl)
+    return merged
 
 
 def _dept_map(departments: List[Dict[str, Any]]) -> Dict[str, str]:
@@ -1797,7 +1817,7 @@ def render_penalties_rewards_advances(
 
 
 # =====================================================================
-# 5. البصمة والـ Payroll (شيت المرتبات للمدير العام و HR ورئيس مجلس الإدارة فقط + إضافي الحضور والانصراف)
+# 5. البصمة والـ Payroll (شيت المرتبات للمدير العام و HR ورئيس مجلس الإدارة فقط + إضافي الحضور والانصراف + المكافآت الثابتة)
 # =====================================================================
 def render_attendance_and_payroll(
     current_user: Dict[str, Any],
@@ -2258,6 +2278,7 @@ def render_attendance_and_payroll(
                 st.info("لا توجد سجلات وقت إضافي مطابقة للفلاتر المختارة.")
         t_idx += 1
 
+    # --- 4) شيت المرتب (لجميع الموظفين — يُظهر المكافآت الثابتة ذات القيمة > 0 باسمها فقط) ---
     with tabs[t_idx]:
         st.markdown("#### 💵 شيت المرتب الشهري الخاص بي")
         my_pay_ym = st.text_input("شهر المرتب (YYYY-MM)", value=date.today().strftime("%Y-%m"), key="my_pay_sheet_ym")
@@ -2277,6 +2298,13 @@ def render_attendance_and_payroll(
         emp_name_txt = my_res.get("name_ar") or current_user.get("name_ar") or "—"
         emp_job_txt = my_res.get("job_title") or current_user.get("job_title") or "موظف"
         emp_no_txt = my_res.get("employee_no") or current_user.get("employee_no") or "—"
+
+        active_fa_my: Dict[str, float] = my_res.get("fixed_allowances") or {}
+        fixed_rows_html = "".join(
+            f"<tr><td>{fa_name}</td><td class='pay-plus'>+ {fa_amt:,.2f} ج</td></tr>"
+            for fa_name, fa_amt in active_fa_my.items()
+            if float(fa_amt or 0) > 0
+        )
 
         st.markdown(
             f"""
@@ -2385,8 +2413,9 @@ def render_attendance_and_payroll(
                         </tr>
                         <tr>
                             <td>المكافآت</td>
-                            <td class="pay-plus">+ {my_res['rewards_total']:,.2f} ج</td>
+                            <td class="pay-plus">+ {my_res['variable_rewards_total']:,.2f} ج</td>
                         </tr>
+                        {fixed_rows_html}
                         <tr>
                             <td>إضافي الحضور والانصراف</td>
                             <td class="pay-plus">+ {my_res['overtime_pay']:,.2f} ج</td>
@@ -2414,6 +2443,7 @@ def render_attendance_and_payroll(
         )
     t_idx += 1
 
+    # --- 5) شيت المرتبات (للمدير العام و HR ورئيس مجلس الإدارة فقط) ---
     if can_view_all_payroll_sheet and t_idx < len(tabs):
         with tabs[t_idx]:
             st.markdown("#### 📊 شيت المرتبات الشهري والأرشيف")
@@ -2437,25 +2467,37 @@ def render_attendance_and_payroll(
                 computed_list.append(res)
 
             if computed_list:
-                sheet_rows = [
-                    {
+                active_fa_cols = sorted({
+                    fa_k
+                    for r in computed_list
+                    for fa_k, fa_v in (r.get("fixed_allowances") or {}).items()
+                    if float(fa_v or 0) > 0
+                })
+
+                sheet_rows = []
+                for r in computed_list:
+                    row_d: Dict[str, Any] = {
                         "الرقم الوظيفي": r["employee_no"],
                         "الاسم": r["name_ar"],
                         "المسمى": r["job_title"],
                         "المرتب الأساسي": r["base_salary"],
                         "إجازات رسمية (+يوم)": r["holiday_bonus"],
-                        "المكافآت": r["rewards_total"],
+                        "المكافآت": r["variable_rewards_total"],
+                    }
+                    for fa_col in active_fa_cols:
+                        row_d[fa_col] = round_half_up_2(float((r.get("fixed_allowances") or {}).get(fa_col) or 0))
+                    row_d.update({
                         "إضافي الحضور والانصراف": r["overtime_pay"],
                         "خصم السلف": r["advances_deduction"],
                         "خصم الجزاءات": r["penalties_deduction"],
                         "خصم التأخير/الانصراف": r["late_deduction"],
                         "المرتب الفعلي": r["net_salary"],
-                    }
-                    for r in computed_list
-                ]
+                    })
+                    sheet_rows.append(row_d)
 
                 tot_base = round_half_up_2(sum(float(r["base_salary"] or 0) for r in computed_list))
                 tot_hol = round_half_up_2(sum(float(r["holiday_bonus"] or 0) for r in computed_list))
+                tot_var_rew = round_half_up_2(sum(float(r["variable_rewards_total"] or 0) for r in computed_list))
                 tot_rew = round_half_up_2(sum(float(r["rewards_total"] or 0) for r in computed_list))
                 tot_ot = round_half_up_2(sum(float(r["overtime_pay"] or 0) for r in computed_list))
                 tot_adv = round_half_up_2(sum(float(r["advances_deduction"] or 0) for r in computed_list))
@@ -2464,19 +2506,25 @@ def render_attendance_and_payroll(
                 tot_all_ded = round_half_up_2(tot_adv + tot_pen + tot_late)
                 tot_net = round_half_up_2(sum(float(r["net_salary"] or 0) for r in computed_list))
 
-                total_row_dict = {
+                total_row_dict: Dict[str, Any] = {
                     "الرقم الوظيفي": "—",
                     "الاسم": "الإجمالي العام",
                     "المسمى": f"عدد: {len(computed_list)}",
                     "المرتب الأساسي": tot_base,
                     "إجازات رسمية (+يوم)": tot_hol,
-                    "المكافآت": tot_rew,
+                    "المكافآت": tot_var_rew,
+                }
+                for fa_col in active_fa_cols:
+                    total_row_dict[fa_col] = round_half_up_2(
+                        sum(float((r.get("fixed_allowances") or {}).get(fa_col) or 0) for r in computed_list)
+                    )
+                total_row_dict.update({
                     "إضافي الحضور والانصراف": tot_ot,
                     "خصم السلف": tot_adv,
                     "خصم الجزاءات": tot_pen,
                     "خصم التأخير/الانصراف": tot_late,
                     "المرتب الفعلي": tot_net,
-                }
+                })
 
                 st.dataframe(sheet_rows + [total_row_dict], use_container_width=True, hide_index=True)
 
@@ -2767,7 +2815,7 @@ def render_kpis_and_reports(
 
 
 # =====================================================================
-# 7. الموظفون والفروع والصلاحيات والإعدادات
+# 7. الموظفون والفروع والصلاحيات والإعدادات (إضافة وتعديل المكافآت الثابتة وإدارة بنودها)
 # =====================================================================
 def render_admin_and_staff(
     current_user: Dict[str, Any],
@@ -2782,6 +2830,7 @@ def render_admin_and_staff(
     user_id = str(current_user.get("id"))
     user_role = (current_user.get("role") or "employee").lower()
     holidays_list = official_holidays or []
+    fa_types_list = _get_fixed_allowance_types(org_settings)
 
     if not (perms.get("manage_settings") or perms.get("manage_payroll") or user_role in ("general_manager", "hr")):
         st.warning("هذا القسم مخصص للإدارة والموارد البشرية.")
@@ -2810,6 +2859,34 @@ def render_admin_and_staff(
         with t_col3:
             st.text_input("عدد ساعات العمل", value=add_hours_str, disabled=True, key=f"add_emp_hours_box_{add_hours_val}")
 
+        # المرتب الأساسي + مكافآت ثابتة (اختيار أكثر من بند وإدخال قيمة كل بند)
+        sal_fa_col1, sal_fa_col2 = st.columns([1.2, 2.8])
+        with sal_fa_col1:
+            base_sal = st.number_input("المرتب الأساسي (جنيه)", min_value=0.0, value=5000.0, step=250.0, key="add_emp_base_sal")
+        with sal_fa_col2:
+            selected_add_fa_names = st.multiselect(
+                "مكافآت ثابتة (اختر بنداً أو أكثر)",
+                fa_types_list,
+                default=[],
+                key="add_emp_fa_multiselect",
+            )
+
+        add_fa_values: Dict[str, float] = {}
+        if selected_add_fa_names:
+            st.caption("أدخل قيمة كل مكافأة ثابتة مختارة بالجنيه (تُضاف تلقائياً للمرتب طالما أكبر من صفر):")
+            fa_cols = st.columns(min(4, len(selected_add_fa_names)))
+            for idx_fa, fa_lbl in enumerate(selected_add_fa_names):
+                with fa_cols[idx_fa % len(fa_cols)]:
+                    add_fa_values[fa_lbl] = float(
+                        st.number_input(
+                            f"{fa_lbl} (ج)",
+                            min_value=0.0,
+                            value=0.0,
+                            step=50.0,
+                            key=f"add_emp_fa_val_{fa_lbl}",
+                        )
+                    )
+
         with st.form("create_emp_form", clear_on_submit=True):
             c1, c2, c3 = st.columns(3)
             with c1:
@@ -2818,21 +2895,23 @@ def render_admin_and_staff(
                 job_title = st.text_input("المسمى الوظيفي", placeholder="مثال: أخصائي تحاليل / استقبال")
             with c2:
                 hire_dt = st.date_input("تاريخ التعيين", value=date.today())
-                base_sal = st.number_input("المرتب الأساسي (جنيه)", min_value=0.0, value=5000.0, step=250.0)
                 role_val = st.selectbox(
                     "الدور الوظيفي",
                     ["employee", "senior", "manager", "hr", "general_manager", "chairman", "vice_chairman"],
                 )
-            with c3:
                 dept_lbl = st.selectbox("الفرع / القسم", ["—"] + list(dept_choices.keys()))
+            with c3:
                 pin_val = st.text_input("رمز الدخول (PIN)", value="1234")
-
-            c4, c5 = st.columns(2)
-            sen_lbl = c4.selectbox("الـ Senior المسؤول عن الإجازات (إن وُجد)", list(emp_ref_choices.keys()))
-            mgr_lbl = c5.selectbox("المدير المباشر / مدير الفرع", list(emp_ref_choices.keys()))
+                sen_lbl = st.selectbox("الـ Senior المسؤول عن الإجازات (إن وُجد)", list(emp_ref_choices.keys()))
+                mgr_lbl = st.selectbox("المدير المباشر / مدير الفرع", list(emp_ref_choices.keys()))
 
             if st.form_submit_button("إضافة الموظف", type="primary"):
                 if eno.strip() and name_ar.strip():
+                    clean_fa_payload = {
+                        k: round_half_up_2(float(v or 0))
+                        for k, v in add_fa_values.items()
+                        if float(v or 0) > 0
+                    }
                     insert_record("employees", {
                         "employee_no": eno.strip(),
                         "name_ar": name_ar.strip(),
@@ -2846,6 +2925,7 @@ def render_admin_and_staff(
                         "direct_manager_id": emp_ref_choices.get(mgr_lbl),
                         "hire_date": hire_dt.isoformat(),
                         "base_salary": float(base_sal),
+                        "fixed_allowances": clean_fa_payload,
                         "pin_code": pin_val.strip(),
                         "status": "active",
                         "created_by": user_id,
@@ -2861,7 +2941,7 @@ def render_admin_and_staff(
                     st.success("✅ تمت إضافة الموظف بنجاح.")
                     st.rerun()
 
-        st.markdown("#### تعديل بيانات الموظفين (الاسم، المسمى الوظيفي، تاريخ التعيين، المرتب، ومواعيد العمل)")
+        st.markdown("#### تعديل بيانات الموظفين (الاسم، المسمى الوظيفي، تاريخ التعيين، المرتب، المكافآت الثابتة، ومواعيد العمل)")
         if employees:
             edit_map = {f"{e.get('name_ar')} (#{e.get('employee_no')})": e for e in employees}
             sel_edit = st.selectbox("اختر موظفاً للتعديل", list(edit_map.keys()), key="edit_emp_picker")
@@ -2879,22 +2959,62 @@ def render_admin_and_staff(
             with et_col3:
                 st.text_input("عدد ساعات العمل", value=f"{upd_hours_val:g} ساعات", disabled=True, key=f"upd_emp_hours_{target_e['id']}_{upd_hours_val}")
 
+            existing_fa_map = extract_active_fixed_allowances(target_e)
+            all_fa_options_edit = list(dict.fromkeys(fa_types_list + list(existing_fa_map.keys())))
+
+            upd_sal_col, upd_fa_sel_col = st.columns([1.2, 2.8])
+            with upd_sal_col:
+                new_sal = st.number_input(
+                    "المرتب الأساسي",
+                    min_value=0.0,
+                    value=float(target_e.get("base_salary") or 0),
+                    step=250.0,
+                    key=f"upd_emp_sal_{target_e['id']}",
+                )
+            with upd_fa_sel_col:
+                picked_upd_fa = st.multiselect(
+                    "مكافآت ثابتة للموظف",
+                    all_fa_options_edit,
+                    default=list(existing_fa_map.keys()),
+                    key=f"upd_emp_fa_sel_{target_e['id']}",
+                )
+
+            upd_fa_values: Dict[str, float] = {}
+            if picked_upd_fa:
+                u_fa_cols = st.columns(min(4, len(picked_upd_fa)))
+                for idx_u, fa_lbl_u in enumerate(picked_upd_fa):
+                    with u_fa_cols[idx_u % len(u_fa_cols)]:
+                        def_val_u = float(existing_fa_map.get(fa_lbl_u) or 0.0)
+                        upd_fa_values[fa_lbl_u] = float(
+                            st.number_input(
+                                f"{fa_lbl_u} (ج)",
+                                min_value=0.0,
+                                value=def_val_u,
+                                step=50.0,
+                                key=f"upd_emp_fa_val_{target_e['id']}_{fa_lbl_u}",
+                            )
+                        )
+
             with st.form("edit_emp_form"):
                 ec1, ec2, ec3 = st.columns(3)
                 new_name = ec1.text_input("الاسم", value=target_e.get("name_ar") or "")
                 new_title = ec2.text_input("المسمى الوظيفي", value=target_e.get("job_title") or "")
                 new_hire = ec3.date_input("تاريخ التعيين", value=parse_date_safe(target_e.get("hire_date")) or date.today())
 
-                ec4, ec5 = st.columns(2)
-                new_sal = ec4.number_input("المرتب الأساسي", min_value=0.0, value=float(target_e.get("base_salary") or 0), step=250.0)
-                new_status = ec5.selectbox("الحالة", ["active", "inactive"], index=0 if (target_e.get("status") or "active") == "active" else 1)
+                new_status = st.selectbox("الحالة", ["active", "inactive"], index=0 if (target_e.get("status") or "active") == "active" else 1)
 
                 if st.form_submit_button("حفظ التعديلات", type="primary"):
+                    clean_upd_fa = {
+                        k: round_half_up_2(float(v or 0))
+                        for k, v in upd_fa_values.items()
+                        if float(v or 0) > 0
+                    }
                     upd_payload: Dict[str, Any] = {
                         "name_ar": new_name.strip(),
                         "job_title": new_title.strip(),
                         "hire_date": new_hire.isoformat(),
                         "base_salary": float(new_sal),
+                        "fixed_allowances": clean_upd_fa,
                         "status": new_status,
                         "work_start_time": upd_w_start.strftime("%H:%M:%S"),
                         "work_end_time": upd_w_end.strftime("%H:%M:%S"),
@@ -2926,6 +3046,7 @@ def render_admin_and_staff(
                         _parse_time_safe(e.get("work_end_time"), time(17, 0)),
                     ),
                     "المرتب الأساسي": e.get("base_salary"),
+                    "مكافآت ثابتة": "، ".join(f"{k}: {v:g}" for k, v in extract_active_fixed_allowances(e).items()) or "—",
                     "الحالة": e.get("status"),
                 }
                 for e in employees
@@ -3005,6 +3126,33 @@ def render_admin_and_staff(
                         by_user_id=user_id,
                     )
                     st.success("✅ تم تحديث الصلاحيات بنجاح.")
+                    st.rerun()
+
+        st.divider()
+        st.markdown("#### 💎 إدارة أنواع المكافآت الثابتة (إضافة بنود جديدة للمكافآت الثابتة)")
+        st.caption("البنود الحالية المتاحة في خانة المكافآت الثابتة: " + " ، ".join(f"`{t}`" for t in fa_types_list))
+        with st.form("add_fixed_allowance_type_form", clear_on_submit=True):
+            fa_c1, fa_c2 = st.columns([3, 1.2])
+            with fa_c1:
+                new_fa_name = st.text_input("اسم بند مكافأة ثابتة جديد", placeholder="مثال: تشجيع أو استكمال دراسة")
+            with fa_c2:
+                st.write("")
+                st.write("")
+                add_fa_type_btn = st.form_submit_button("➕ إضافة بند", type="primary")
+
+            if add_fa_type_btn:
+                clean_fa = new_fa_name.strip()
+                if clean_fa and clean_fa not in fa_types_list:
+                    updated_fa_types = fa_types_list + [clean_fa]
+                    upsert_record(
+                        "org_settings",
+                        {
+                            "id": "main",
+                            "fixed_allowance_types": updated_fa_types,
+                        },
+                        on_conflict="id",
+                    )
+                    st.success(f"✅ تمت إضافة بند المكافأة الثابتة ({clean_fa}).")
                     st.rerun()
 
         st.divider()
