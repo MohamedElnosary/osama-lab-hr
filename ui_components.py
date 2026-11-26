@@ -64,13 +64,21 @@ EMPLOYEE_JOB_TITLES: List[str] = [
     "مدير عام",
 ]
 
-KPI_SELF_TABS: List[str] = [
+KPI_CONFIG_TABS: List[str] = [
     "استقبال",
     "استقبال وسحب عينات",
     "خدمة عملاء",
     "كيميائيين",
     "مدير مباشر",
     "مدير عام",
+]
+
+KPI_SELF_TABS: List[str] = [
+    "استقبال",
+    "استقبال وسحب عينات",
+    "خدمة عملاء",
+    "كيميائيين",
+    "مدير مباشر",
 ]
 
 DEFAULT_SELF_QUESTIONS_BY_TAB: Dict[str, List[Dict[str, Any]]] = {
@@ -104,11 +112,6 @@ DEFAULT_SELF_QUESTIONS_BY_TAB: Dict[str, List[Dict[str, Any]]] = {
         {"question": "متابعة الحضور والانصراف وسير العمليات اليومية", "points": 25.0},
         {"question": "الالتزام بالسياسات الإدارية واتخاذ القرارات بفاعلية", "points": 20.0},
     ],
-    "مدير عام": [
-        {"question": "وضوح الرؤية والتخطيط الاستراتيجي وتطوير المعامل", "points": 35.0},
-        {"question": "إحكام الرقابة الإدارية والمالية وتطبيق السياسات", "points": 35.0},
-        {"question": "قيادة فرق العمل ودعم جودة الأداء المؤسسي", "points": 30.0},
-    ],
 }
 
 DEFAULT_PEER_QUESTIONS_BY_TARGET: Dict[str, List[Dict[str, Any]]] = {
@@ -131,14 +134,18 @@ DEFAULT_PEER_QUESTIONS_BY_TARGET: Dict[str, List[Dict[str, Any]]] = {
 
 
 def _save_org_settings_patch(patch: Dict[str, Any]) -> None:
-    """حفظ تحديثات إعدادات المنظمة بأمان (تحديث السجل القائم أو إدراج سجل main)."""
-    existing_rows = fetch_table("org_settings", limit=5)
-    if existing_rows and existing_rows[0].get("id") is not None:
-        rec_id = existing_rows[0]["id"]
-        update_record("org_settings", rec_id, patch)
-    else:
-        payload = {"id": "main", **patch}
-        upsert_record("org_settings", payload, on_conflict="id")
+    """حفظ تحديثات إعدادات المنظمة في قاعدة البيانات وفي session_state."""
+    for k, v in patch.items():
+        st.session_state[f"org_cache_{k}"] = v
+    try:
+        existing_rows = fetch_table("org_settings", limit=5)
+        if existing_rows and existing_rows[0].get("id") is not None:
+            rec_id = existing_rows[0]["id"]
+            update_record("org_settings", rec_id, patch)
+        else:
+            upsert_record("org_settings", {"id": "main", **patch}, on_conflict="id")
+    except Exception:
+        pass
 
 
 def _normalize_q_list(raw_list: Any, fallback_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -160,7 +167,13 @@ def _normalize_q_list(raw_list: Any, fallback_list: List[Dict[str, Any]]) -> Lis
 
 
 def _get_all_self_questions(org_settings: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
-    saved = org_settings.get("kpi_self_questions")
+    if "org_cache_kpi_self_questions" in st.session_state and isinstance(st.session_state["org_cache_kpi_self_questions"], dict):
+        saved = st.session_state["org_cache_kpi_self_questions"]
+    else:
+        saved = org_settings.get("kpi_self_questions")
+        if isinstance(saved, dict):
+            st.session_state["org_cache_kpi_self_questions"] = saved
+
     out: Dict[str, List[Dict[str, Any]]] = {}
     for tab_k in KPI_SELF_TABS:
         fb = DEFAULT_SELF_QUESTIONS_BY_TAB.get(tab_k, [])
@@ -172,7 +185,13 @@ def _get_all_self_questions(org_settings: Dict[str, Any]) -> Dict[str, List[Dict
 
 
 def _get_all_peer_questions(org_settings: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
-    saved = org_settings.get("kpi_peer_questions_v2")
+    if "org_cache_kpi_peer_questions_v2" in st.session_state and isinstance(st.session_state["org_cache_kpi_peer_questions_v2"], dict):
+        saved = st.session_state["org_cache_kpi_peer_questions_v2"]
+    else:
+        saved = org_settings.get("kpi_peer_questions_v2")
+        if isinstance(saved, dict):
+            st.session_state["org_cache_kpi_peer_questions_v2"] = saved
+
     out: Dict[str, List[Dict[str, Any]]] = {}
     for key_p in ("senior", "manager", "gm"):
         fb = DEFAULT_PEER_QUESTIONS_BY_TARGET.get(key_p, [])
@@ -183,12 +202,56 @@ def _get_all_peer_questions(org_settings: Dict[str, Any]) -> Dict[str, List[Dict
     return out
 
 
+def _render_q_editor_block(
+    section_title: str,
+    q_list: List[Dict[str, Any]],
+    form_key: str,
+    del_prefix: str,
+    on_change_callback: Any,
+) -> None:
+    """عرض قائمة الأسئلة مع درجتها وإمكانية الحذف أو إضافة سؤال جديد بدرجته."""
+    st.markdown(f"##### {section_title}")
+    tot_pts = round_half_up_2(sum(float(x.get("points") or 0) for x in q_list))
+    st.caption(f"عدد الأسئلة: **{len(q_list)}** | إجمالي الدرجات: **{tot_pts:g}**")
+
+    if q_list:
+        for idx_q, item in enumerate(q_list):
+            c_txt, c_pts, c_del = st.columns([4.2, 1.2, 0.8])
+            c_txt.write(f"**{idx_q + 1}.** {item.get('question')}")
+            c_pts.write(f"`{float(item.get('points') or 0):g} درجة`")
+            if c_del.button("حذف", key=f"{del_prefix}_{idx_q}"):
+                updated = [dict(x) for j, x in enumerate(q_list) if j != idx_q]
+                on_change_callback(updated)
+                st.rerun()
+    else:
+        st.info("لا توجد أسئلة مضافة في هذا القسم حالياً.")
+
+    with st.form(form_key, clear_on_submit=True):
+        f1, f2, f3 = st.columns([3.5, 1.3, 1.2])
+        with f1:
+            q_txt_inp = st.text_input("نص السؤال", placeholder="اكتب السؤال هنا")
+        with f2:
+            q_pts_inp = st.number_input("درجة السؤال", min_value=0.5, max_value=100.0, value=10.0, step=0.5)
+        with f3:
+            st.write("")
+            st.write("")
+            sub_btn = st.form_submit_button("➕ إضافة سؤال", type="primary")
+
+        if sub_btn:
+            clean_q = q_txt_inp.strip()
+            if clean_q:
+                updated = [dict(x) for x in q_list] + [{"question": clean_q, "points": float(q_pts_inp)}]
+                on_change_callback(updated)
+                st.success(f"✅ تمت إضافة السؤال ({clean_q}) بدرجة ({q_pts_inp:g}).")
+                st.rerun()
+            else:
+                st.warning("يرجى كتابة نص السؤال أولاً.")
+
+
 def _map_job_title_to_self_tab(emp: Dict[str, Any]) -> str:
     jt = str(emp.get("job_title") or "").strip().lower()
     role = str(emp.get("role") or "").strip().lower()
 
-    if "مدير عام" in jt or role == "general_manager":
-        return "مدير عام"
     if "مدير مباشر" in jt or role == "manager":
         return "مدير مباشر"
     if "كيميائي" in jt or "كيميائ" in jt or role == "senior":
@@ -205,7 +268,9 @@ def _map_job_title_to_self_tab(emp: Dict[str, Any]) -> str:
 def _get_fixed_allowance_types(org_settings: Dict[str, Any]) -> List[str]:
     """إرجاع قائمة أنواع المكافآت الثابتة المتاحة (الافتراضية + المضافة من المستخدم)."""
     merged: List[str] = list(DEFAULT_FIXED_ALLOWANCE_TYPES)
-    custom_list = org_settings.get("fixed_allowance_types")
+    custom_list = st.session_state.get("org_cache_fixed_allowance_types")
+    if custom_list is None:
+        custom_list = org_settings.get("fixed_allowance_types")
     if isinstance(custom_list, list):
         for item in custom_list:
             lbl = str(item or "").strip()
@@ -2643,7 +2708,7 @@ def render_attendance_and_payroll(
 
 
 # =====================================================================
-# 6. التقارير المستقلة (في القائمة الرئيسية تحت البصمة والـ Payroll)
+# 6. التقارير المستقلة
 # =====================================================================
 def render_reports_module(
     current_user: Dict[str, Any],
@@ -2724,7 +2789,7 @@ def render_reports_module(
 
 
 # =====================================================================
-# 7. شاشة الـ KPIs (تقييم نفسي حسب المسمى الوظيفي + السينيور + المدير المباشر + المدير العام بشريط 0.5)
+# 7. شاشة الـ KPIs
 # =====================================================================
 def render_kpis_module(
     current_user: Dict[str, Any],
@@ -2744,9 +2809,9 @@ def render_kpis_module(
         for k in _emp_identifiers(e):
             emp_by_any_id[k] = e
 
-    kpi_active = bool(org_settings.get("kpi_evaluation_active", False))
-    eval_cycle_type = str(org_settings.get("kpi_cycle_type") or "نصف سنوي")
-    kpi_start_dt_str = str(org_settings.get("kpi_start_date") or date.today().isoformat())[:10]
+    kpi_active = bool(st.session_state.get("org_cache_kpi_evaluation_active", org_settings.get("kpi_evaluation_active", False)))
+    eval_cycle_type = str(st.session_state.get("org_cache_kpi_cycle_type") or org_settings.get("kpi_cycle_type") or "نصف سنوي")
+    kpi_start_dt_str = str(st.session_state.get("org_cache_kpi_start_date") or org_settings.get("kpi_start_date") or date.today().isoformat())[:10]
     period_lbl = f"{eval_cycle_type} — يبدأ من {kpi_start_dt_str}"
 
     if not kpi_active and user_role not in ("general_manager", "hr"):
@@ -2781,7 +2846,6 @@ def render_kpis_module(
         "🏢 تقييم المدير العام",
     ])
 
-    # --- 1) تقييم نفسي ---
     with sub_tabs[0]:
         st.markdown(f"#### التقييم الذاتي — **{sel_self_tab}**")
         q_items = self_q_by_tab.get(sel_self_tab) or []
@@ -2854,7 +2918,6 @@ def render_kpis_module(
             st.success("✅ تم حفظ التقييم الذاتي بنجاح.")
             st.rerun()
 
-    # --- 2) تقييم السينيور ---
     with sub_tabs[1]:
         sen_id_str = str(current_user.get("senior_id") or "").strip()
         sen_emp = emp_by_any_id.get(sen_id_str)
@@ -2901,7 +2964,6 @@ def render_kpis_module(
                 st.success("✅ تم حفظ تقييم السينيور بنجاح.")
                 st.rerun()
 
-    # --- 3) تقييم المدير المباشر ---
     with sub_tabs[2]:
         mgr_id_str = str(current_user.get("direct_manager_id") or "").strip()
         mgr_emp = emp_by_any_id.get(mgr_id_str)
@@ -2948,7 +3010,6 @@ def render_kpis_module(
                 st.success("✅ تم حفظ تقييم المدير المباشر بنجاح.")
                 st.rerun()
 
-    # --- 4) تقييم المدير العام ---
     with sub_tabs[3]:
         gm_emp = next((e for e in employees if str(e.get("role") or "").lower() == "general_manager"), None)
         gm_target_id = gm_emp["id"] if gm_emp else None
@@ -2996,7 +3057,7 @@ def render_kpis_module(
 
 
 # =====================================================================
-# 8. الموظفون والفروع والصلاحيات والإعدادات (المسميات الوظيفية المنسدلة + أسئلة التقييم بالدرجات)
+# 8. الموظفون والفروع والصلاحيات والإعدادات
 # =====================================================================
 def render_admin_and_staff(
     current_user: Dict[str, Any],
@@ -3431,9 +3492,9 @@ def render_admin_and_staff(
     with tab_kpi_cfg:
         st.markdown("#### ⚙️ إعدادات الـ KPIs")
 
-        cur_cycle_val = str(org_settings.get("kpi_cycle_type") or "نصف سنوي")
-        cur_start_dt = parse_date_safe(org_settings.get("kpi_start_date")) or date.today()
-        cur_active_val = bool(org_settings.get("kpi_evaluation_active", False))
+        cur_cycle_val = str(st.session_state.get("org_cache_kpi_cycle_type") or org_settings.get("kpi_cycle_type") or "نصف سنوي")
+        cur_start_dt = parse_date_safe(st.session_state.get("org_cache_kpi_start_date") or org_settings.get("kpi_start_date")) or date.today()
+        cur_active_val = bool(st.session_state.get("org_cache_kpi_evaluation_active", org_settings.get("kpi_evaluation_active", False)))
 
         kc1, kc2, kc3 = st.columns([2, 2, 1.5])
         with kc1:
@@ -3464,155 +3525,79 @@ def render_admin_and_staff(
         st.markdown("#### 📝 أسئلة التقييم")
 
         self_q_all = _get_all_self_questions(org_settings)
-        q_tabs = st.tabs(KPI_SELF_TABS)
+        peer_q_all = _get_all_peer_questions(org_settings)
+        cfg_tabs = st.tabs(KPI_CONFIG_TABS)
 
-        for idx_t, t_name in enumerate(KPI_SELF_TABS):
-            with q_tabs[idx_t]:
-                cur_t_qs = list(self_q_all.get(t_name) or [])
-                tot_t_pts = round_half_up_2(sum(float(x.get("points") or 0) for x in cur_t_qs))
-                st.caption(f"إجمالي درجات أسئلة ({t_name}): **{tot_t_pts:g} درجة**")
-
-                if cur_t_qs:
-                    st.dataframe(
-                        [
-                            {
-                                "م": i + 1,
-                                "السؤال": item.get("question"),
-                                "الدرجة": item.get("points"),
-                            }
-                            for i, item in enumerate(cur_t_qs)
-                        ],
-                        use_container_width=True,
-                        hide_index=True,
-                    )
-                    for i, item in enumerate(cur_t_qs):
-                        del_c1, del_c2 = st.columns([5, 1])
-                        del_c1.write(f"**{i + 1}.** {item.get('question')} — `{item.get('points'):g} درجة`")
-                        if del_c2.button("حذف", key=f"del_self_q_item_{t_name}_{i}"):
-                            cur_t_qs.pop(i)
-                            self_q_all[t_name] = cur_t_qs
-                            _save_org_settings_patch({"kpi_self_questions": self_q_all})
-                            st.rerun()
-
-                with st.form(f"add_self_q_form_{t_name}", clear_on_submit=True):
-                    aq_c1, aq_c2, aq_c3 = st.columns([3.5, 1.3, 1.2])
-                    with aq_c1:
-                        q_inp_txt = st.text_input("نص السؤال", placeholder="اكتب السؤال هنا")
-                    with aq_c2:
-                        q_inp_pts = st.number_input("الدرجة", min_value=0.5, max_value=100.0, value=10.0, step=0.5)
-                    with aq_c3:
-                        st.write("")
-                        st.write("")
-                        add_q_sub = st.form_submit_button("➕ إضافة سؤال", type="primary")
-
-                    if add_q_sub:
-                        if q_inp_txt.strip():
-                            cur_t_qs.append({
-                                "question": q_inp_txt.strip(),
-                                "points": float(q_inp_pts),
-                            })
-                            self_q_all[t_name] = cur_t_qs
-                            _save_org_settings_patch({"kpi_self_questions": self_q_all})
-                            st.success(f"✅ تمت إضافة السؤال بدرجة ({q_inp_pts:g}) إلى ({t_name}).")
-                            st.rerun()
-                        else:
-                            st.warning("يرجى كتابة نص السؤال أولاً.")
-
-                # تحت تبويب senior ومدير مباشر: جزء مستقل للأسئلة الخاصة بتقييم الموظفين ليهم
-                if t_name in ("مدير مباشر",):
-                    st.divider()
-                    st.markdown("##### 📋 الأسئلة الخاصة بتقييم الموظفين ليهم (تقييم الموظفين للمدير المباشر)")
-                    peer_all = _get_all_peer_questions(org_settings)
-                    mgr_peer_list = list(peer_all.get("manager") or [])
-                    if mgr_peer_list:
-                        for idx_mp, item_mp in enumerate(mgr_peer_list):
-                            mp_c1, mp_c2 = st.columns([5, 1])
-                            mp_c1.write(f"**{idx_mp + 1}.** {item_mp.get('question')} — `{item_mp.get('points'):g} درجة`")
-                            if mp_c2.button("حذف", key=f"del_mgr_peer_q_{idx_mp}"):
-                                mgr_peer_list.pop(idx_mp)
-                                peer_all["manager"] = mgr_peer_list
-                                _save_org_settings_patch({"kpi_peer_questions_v2": peer_all})
-                                st.rerun()
-
-                    with st.form("add_mgr_peer_q_form", clear_on_submit=True):
-                        mp_f1, mp_f2, mp_f3 = st.columns([3.5, 1.3, 1.2])
-                        with mp_f1:
-                            mp_q_txt = st.text_input("سؤال تقييم الموظفين للمدير المباشر", placeholder="اكتب السؤال")
-                        with mp_f2:
-                            mp_q_pts = st.number_input("الدرجة", min_value=0.5, max_value=100.0, value=10.0, step=0.5, key="mp_q_pts_inp")
-                        with mp_f3:
-                            st.write("")
-                            st.write("")
-                            mp_q_sub = st.form_submit_button("➕ إضافة", type="primary", key="mp_q_sub_btn")
-
-                        if mp_q_sub and mp_q_txt.strip():
-                            mgr_peer_list.append({"question": mp_q_txt.strip(), "points": float(mp_q_pts)})
-                            peer_all["manager"] = mgr_peer_list
-                            _save_org_settings_patch({"kpi_peer_questions_v2": peer_all})
-                            st.success("✅ تمت إضافة سؤال تقييم المدير المباشر.")
-                            st.rerun()
-
+        for idx_t, t_name in enumerate(KPI_CONFIG_TABS):
+            with cfg_tabs[idx_t]:
                 if t_name == "مدير عام":
+                    st.info("المدير العام ليس له أسئلة تقييم ذاتي لأنه لا يقيّم نفسه، ويتم تقييمه من موظفي الاستقبال واستقبال وسحب العينات.")
+                    _render_q_editor_block(
+                        section_title="الأسئلة الخاصة بتقييم الموظفين للمدير العام",
+                        q_list=list(peer_q_all.get("gm") or []),
+                        form_key="add_gm_peer_q_form_tab",
+                        del_prefix="del_gm_peer_q_tab",
+                        on_change_callback=lambda upd, p_all=peer_q_all: _save_org_settings_patch(
+                            {"kpi_peer_questions_v2": {**p_all, "gm": upd}}
+                        ),
+                    )
+                elif t_name == "مدير مباشر":
+                    _render_q_editor_block(
+                        section_title=f"أسئلة تقييم ({t_name}) لنفسه",
+                        q_list=list(self_q_all.get(t_name) or []),
+                        form_key=f"add_self_q_form_{t_name}",
+                        del_prefix=f"del_self_q_{t_name}",
+                        on_change_callback=lambda upd, s_all=self_q_all, tk=t_name: _save_org_settings_patch(
+                            {"kpi_self_questions": {**s_all, tk: upd}}
+                        ),
+                    )
                     st.divider()
-                    st.markdown("##### 📋 الأسئلة الخاصة بتقييم الموظفين للمدير العام")
-                    peer_all = _get_all_peer_questions(org_settings)
-                    gm_peer_list = list(peer_all.get("gm") or [])
-                    if gm_peer_list:
-                        for idx_gp, item_gp in enumerate(gm_peer_list):
-                            gp_c1, gp_c2 = st.columns([5, 1])
-                            gp_c1.write(f"**{idx_gp + 1}.** {item_gp.get('question')} — `{item_gp.get('points'):g} درجة`")
-                            if gp_c2.button("حذف", key=f"del_gm_peer_q_{idx_gp}"):
-                                gm_peer_list.pop(idx_gp)
-                                peer_all["gm"] = gm_peer_list
-                                _save_org_settings_patch({"kpi_peer_questions_v2": peer_all})
-                                st.rerun()
-
-                    with st.form("add_gm_peer_q_form", clear_on_submit=True):
-                        gp_f1, gp_f2, gp_f3 = st.columns([3.5, 1.3, 1.2])
-                        with gp_f1:
-                            gp_q_txt = st.text_input("سؤال تقييم الموظفين للمدير العام", placeholder="اكتب السؤال")
-                        with gp_f2:
-                            gp_q_pts = st.number_input("الدرجة", min_value=0.5, max_value=100.0, value=10.0, step=0.5, key="gp_q_pts_inp")
-                        with gp_f3:
-                            st.write("")
-                            st.write("")
-                            gp_q_sub = st.form_submit_button("➕ إضافة", type="primary", key="gp_q_sub_btn")
-
-                        if gp_q_sub and gp_q_txt.strip():
-                            gm_peer_list.append({"question": gp_q_txt.strip(), "points": float(gp_q_pts)})
-                            peer_all["gm"] = gm_peer_list
-                            _save_org_settings_patch({"kpi_peer_questions_v2": peer_all})
-                            st.success("✅ تمت إضافة سؤال تقييم المدير العام.")
-                            st.rerun()
-
-        st.divider()
-        st.markdown("#### 🧑‍🔬 الأسئلة الخاصة بتقييم الموظفين للسينيور (senior)")
-        peer_all_sen = _get_all_peer_questions(org_settings)
-        sen_peer_list = list(peer_all_sen.get("senior") or [])
-        if sen_peer_list:
-            for idx_sp, item_sp in enumerate(sen_peer_list):
-                sp_c1, sp_c2 = st.columns([5, 1])
-                sp_c1.write(f"**{idx_sp + 1}.** {item_sp.get('question')} — `{item_sp.get('points'):g} درجة`")
-                if sp_c2.button("حذف", key=f"del_sen_peer_q_{idx_sp}"):
-                    sen_peer_list.pop(idx_sp)
-                    peer_all_sen["senior"] = sen_peer_list
-                    _save_org_settings_patch({"kpi_peer_questions_v2": peer_all_sen})
-                    st.rerun()
-
-        with st.form("add_sen_peer_q_form", clear_on_submit=True):
-            sp_f1, sp_f2, sp_f3 = st.columns([3.5, 1.3, 1.2])
-            with sp_f1:
-                sp_q_txt = st.text_input("سؤال تقييم الموظفين للسينيور", placeholder="اكتب السؤال")
-            with sp_f2:
-                sp_q_pts = st.number_input("الدرجة", min_value=0.5, max_value=100.0, value=10.0, step=0.5, key="sp_q_pts_inp")
-            with sp_f3:
-                st.write("")
-                st.write("")
-                sp_q_sub = st.form_submit_button("➕ إضافة", type="primary", key="sp_q_sub_btn")
-
-            if sp_q_sub and sp_q_txt.strip():
-                sen_peer_list.append({"question": sp_q_txt.strip(), "points": float(sp_q_pts)})
-                peer_all_sen["senior"] = sen_peer_list
-                _save_org_settings_patch({"kpi_peer_questions_v2": peer_all_sen})
-                st.success("✅ تمت إضافة سؤال تقييم السينيور.")
-                st.rerun()
+                    _render_q_editor_block(
+                        section_title="الأسئلة الخاصة بتقييم الموظفين للمدير العام",
+                        q_list=list(peer_q_all.get("gm") or []),
+                        form_key="add_gm_peer_q_form_under_mgr",
+                        del_prefix="del_gm_peer_q_under_mgr",
+                        on_change_callback=lambda upd, p_all=peer_q_all: _save_org_settings_patch(
+                            {"kpi_peer_questions_v2": {**p_all, "gm": upd}}
+                        ),
+                    )
+                else:
+                    _render_q_editor_block(
+                        section_title=f"أسئلة تقييم ({t_name}) لنفسه",
+                        q_list=list(self_q_all.get(t_name) or []),
+                        form_key=f"add_self_q_form_{t_name}",
+                        del_prefix=f"del_self_q_{t_name}",
+                        on_change_callback=lambda upd, s_all=self_q_all, tk=t_name: _save_org_settings_patch(
+                            {"kpi_self_questions": {**s_all, tk: upd}}
+                        ),
+                    )
+                    st.divider()
+                    _render_q_editor_block(
+                        section_title=f"الأسئلة الخاصة بتقييم الموظفين في ({t_name}) للسينيور",
+                        q_list=list(peer_q_all.get("senior") or []),
+                        form_key=f"add_sen_peer_q_form_{t_name}",
+                        del_prefix=f"del_sen_peer_q_{t_name}",
+                        on_change_callback=lambda upd, p_all=peer_q_all: _save_org_settings_patch(
+                            {"kpi_peer_questions_v2": {**p_all, "senior": upd}}
+                        ),
+                    )
+                    st.divider()
+                    _render_q_editor_block(
+                        section_title=f"الأسئلة الخاصة بتقييم الموظفين في ({t_name}) للمدير المباشر",
+                        q_list=list(peer_q_all.get("manager") or []),
+                        form_key=f"add_mgr_peer_q_form_{t_name}",
+                        del_prefix=f"del_mgr_peer_q_{t_name}",
+                        on_change_callback=lambda upd, p_all=peer_q_all: _save_org_settings_patch(
+                            {"kpi_peer_questions_v2": {**p_all, "manager": upd}}
+                        ),
+                    )
+                    st.divider()
+                    _render_q_editor_block(
+                        section_title=f"الأسئلة الخاصة بتقييم الموظفين في ({t_name}) للمدير العام",
+                        q_list=list(peer_q_all.get("gm") or []),
+                        form_key=f"add_gm_peer_q_form_{t_name}",
+                        del_prefix=f"del_gm_peer_q_{t_name}",
+                        on_change_callback=lambda upd, p_all=peer_q_all: _save_org_settings_patch(
+                            {"kpi_peer_questions_v2": {**p_all, "gm": upd}}
+                        ),
+                    )
