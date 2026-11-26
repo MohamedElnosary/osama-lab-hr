@@ -142,6 +142,55 @@ DEFAULT_PEER_QUESTIONS_BY_TARGET: Dict[str, List[Dict[str, Any]]] = {
 }
 
 
+def _build_simple_pdf_bytes(title_text: str, lines: List[str]) -> bytes:
+    """توليد ملف PDF قياسي خفيف بدون اعتماد على مكتبات خارجية."""
+    def _escape_pdf_str(s: str) -> str:
+        safe_ascii = s.encode("latin-1", errors="replace").decode("latin-1")
+        return safe_ascii.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+    content_cmds: List[str] = ["BT", "/F1 13 Tf", "40 760 Td", f"({_escape_pdf_str(title_text)}) Tj"]
+    y_pos = 736
+    for ln in lines[:42]:
+        if y_pos < 50:
+            break
+        content_cmds.append(f"1 0 0 1 40 {y_pos} Tm")
+        content_cmds.append("/F1 10 Tf")
+        content_cmds.append(f"({_escape_pdf_str(ln)}) Tj")
+        y_pos -= 16
+    content_cmds.append("ET")
+    stream_data = ("\n".join(content_cmds)).encode("latin-1", errors="replace")
+
+    objs: List[bytes] = []
+    objs.append(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n")
+    objs.append(b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n")
+    objs.append(
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+        b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n"
+    )
+    objs.append(b"4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n")
+    objs.append(
+        f"5 0 obj\n<< /Length {len(stream_data)} >>\nstream\n".encode("latin-1")
+        + stream_data
+        + b"\nendstream\nendobj\n"
+    )
+
+    pdf_buf = bytearray(b"%PDF-1.4\n")
+    offsets: List[int] = [0]
+    for obj in objs:
+        offsets.append(len(pdf_buf))
+        pdf_buf.extend(obj)
+
+    xref_pos = len(pdf_buf)
+    pdf_buf.extend(f"xref\n0 {len(objs) + 1}\n".encode("latin-1"))
+    pdf_buf.extend(b"0000000000 65535 f \n")
+    for off in offsets[1:]:
+        pdf_buf.extend(f"{off:010d} 00000 n \n".encode("latin-1"))
+    pdf_buf.extend(
+        f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n".encode("latin-1")
+    )
+    return bytes(pdf_buf)
+
+
 def _get_effective_org_state(org_settings: Dict[str, Any]) -> Dict[str, Any]:
     """دمج إعدادات قاعدة البيانات مع أحدث التعديلات الحية في session_state."""
     base = dict(org_settings or {})
@@ -336,6 +385,143 @@ def _compute_kpi_period_metrics(
         "rewards_count": rewards_count,
         "penalties_count": penalties_count,
         "total_advances": base_sum["total_advances"],
+    }
+
+
+def _build_detailed_employee_kpi_breakdown(
+    emp: Dict[str, Any],
+    start_date: date,
+    end_date: date,
+    leave_requests: List[Dict[str, Any]],
+    attendance_logs: List[Dict[str, Any]],
+    penalties_rewards: List[Dict[str, Any]],
+    advances: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """تجميع التفاصيل الشهرية والشاملة للإجازات (عارضة/اعتيادي/بالأشهر)، الجزاءات، المكافآت، السلف، والإضافي."""
+    emp_ids = _emp_identifiers(emp)
+    emp_id_primary = str(emp.get("id") or "")
+
+    casual_days = 0.0
+    regular_days = 0.0
+    other_leave_days = 0.0
+    leave_items: List[Dict[str, Any]] = []
+    leaves_by_month: Dict[str, float] = {}
+
+    for lr in leave_requests:
+        req_e = str(lr.get("employee_id") or "")
+        req_u = str(lr.get("employee_user_id") or "")
+        if req_e not in emp_ids and (not req_u or req_u not in emp_ids):
+            continue
+        if str(lr.get("status") or "").strip().lower() != "approved":
+            continue
+        s_dt = parse_date_safe(lr.get("start_date"))
+        e_dt = parse_date_safe(lr.get("end_date")) or s_dt
+        if not s_dt:
+            continue
+        if s_dt < start_date or s_dt > end_date:
+            continue
+
+        d_val = float(lr.get("days") or 0)
+        t_name = str(lr.get("type_name") or lr.get("type_code") or "إجازة").strip()
+        t_code = str(lr.get("type_code") or "").strip().lower()
+        bf = str(lr.get("balance_field") or "").strip().lower()
+
+        if "عارض" in t_name or t_code == "casual" or bf == "casual":
+            casual_days = round_half_up_2(casual_days + d_val)
+        elif "اعتياد" in t_name or "سنو" in t_name or t_code in ("regular", "annual") or bf == "annual":
+            regular_days = round_half_up_2(regular_days + d_val)
+        else:
+            other_leave_days = round_half_up_2(other_leave_days + d_val)
+
+        ym_k = s_dt.strftime("%Y-%m")
+        leaves_by_month[ym_k] = round_half_up_2(leaves_by_month.get(ym_k, 0.0) + d_val)
+        leave_items.append({
+            "نوع الإجازة": t_name,
+            "الشهر": ym_k,
+            "من": s_dt.isoformat(),
+            "إلى": (e_dt or s_dt).isoformat(),
+            "الأيام": d_val,
+        })
+
+    penalties_by_month: Dict[str, int] = {}
+    penalties_total_cnt = 0
+    for pr in penalties_rewards:
+        if str(pr.get("employee_id") or "") not in emp_ids:
+            continue
+        if str(pr.get("status") or "").strip().lower() != "approved":
+            continue
+        if str(pr.get("entry_type") or "").strip().lower() != "penalty":
+            continue
+        i_dt = parse_date_safe(pr.get("issue_date"))
+        if i_dt and (start_date <= i_dt <= end_date):
+            ym_p = str(pr.get("payroll_month") or i_dt.strftime("%Y-%m"))[:7]
+            penalties_by_month[ym_p] = penalties_by_month.get(ym_p, 0) + 1
+            penalties_total_cnt += 1
+
+    rewards_by_month: Dict[str, int] = {}
+    rewards_total_cnt = 0
+    for pr in penalties_rewards:
+        if str(pr.get("employee_id") or "") not in emp_ids:
+            continue
+        if str(pr.get("status") or "").strip().lower() != "approved":
+            continue
+        if str(pr.get("entry_type") or "").strip().lower() != "reward":
+            continue
+        i_dt = parse_date_safe(pr.get("issue_date"))
+        if i_dt and (start_date <= i_dt <= end_date):
+            ym_r = str(pr.get("payroll_month") or i_dt.strftime("%Y-%m"))[:7]
+            rewards_by_month[ym_r] = rewards_by_month.get(ym_r, 0) + 1
+            rewards_total_cnt += 1
+
+    advances_by_month: Dict[str, float] = {}
+    advances_total_amt = 0.0
+    for adv in advances:
+        if str(adv.get("employee_id") or "") != emp_id_primary and str(adv.get("employee_id") or "") not in emp_ids:
+            continue
+        if str(adv.get("status") or "").strip().lower() in ("rejected", "cancelled"):
+            continue
+        r_dt = parse_date_safe(adv.get("request_date"))
+        if r_dt and (start_date <= r_dt <= end_date):
+            amt_a = round_half_up_2(float(adv.get("total_amount") or 0))
+            ym_a = str(adv.get("start_payroll_month") or r_dt.strftime("%Y-%m"))[:7]
+            advances_by_month[ym_a] = round_half_up_2(advances_by_month.get(ym_a, 0.0) + amt_a)
+            advances_total_amt = round_half_up_2(advances_total_amt + amt_a)
+
+    ot_mins_by_month: Dict[str, int] = {}
+    ot_days_by_month: Dict[str, set] = {}
+    total_ot_mins = 0
+    all_ot_days = set()
+    for att in attendance_logs:
+        if str(att.get("employee_id") or "") not in emp_ids:
+            continue
+        w_dt = parse_date_safe(att.get("work_date"))
+        if not w_dt or not (start_date <= w_dt <= end_date):
+            continue
+        ot_m = int(att.get("overtime_minutes") or 0)
+        if ot_m > 0 and str(att.get("overtime_status") or "").strip().lower() == "approved":
+            ym_o = w_dt.strftime("%Y-%m")
+            ot_mins_by_month[ym_o] = ot_mins_by_month.get(ym_o, 0) + ot_m
+            ot_days_by_month.setdefault(ym_o, set()).add(w_dt.isoformat())
+            total_ot_mins += ot_m
+            all_ot_days.add(w_dt.isoformat())
+
+    return {
+        "casual_days": casual_days,
+        "regular_days": regular_days,
+        "other_leave_days": other_leave_days,
+        "total_leave_days": round_half_up_2(casual_days + regular_days + other_leave_days),
+        "leave_items": leave_items,
+        "leaves_by_month": dict(sorted(leaves_by_month.items())),
+        "penalties_total_cnt": penalties_total_cnt,
+        "penalties_by_month": dict(sorted(penalties_by_month.items())),
+        "rewards_total_cnt": rewards_total_cnt,
+        "rewards_by_month": dict(sorted(rewards_by_month.items())),
+        "advances_total_amt": advances_total_amt,
+        "advances_by_month": dict(sorted(advances_by_month.items())),
+        "total_ot_mins": total_ot_mins,
+        "total_ot_days": len(all_ot_days),
+        "ot_mins_by_month": dict(sorted(ot_mins_by_month.items())),
+        "ot_days_by_month": {k: len(v) for k, v in sorted(ot_days_by_month.items())},
     }
 
 
@@ -2862,7 +3048,7 @@ def render_reports_module(
 
 
 # =====================================================================
-# 7. شاشة الـ KPIs (أدوار وصلاحيات + تقييم الموظفين للمدير المباشر + تقارير وطباعة المدير العام)
+# 7. شاشة الـ KPIs
 # =====================================================================
 def render_kpis_module(
     current_user: Dict[str, Any],
@@ -2876,9 +3062,7 @@ def render_kpis_module(
 ) -> None:
     st.markdown("### 🎯 تقييم الأداء (KPIs)")
     user_id = str(current_user.get("id"))
-    my_ids = _emp_identifiers(current_user)
     user_role = (current_user.get("role") or "employee").strip().lower()
-
     emp_by_any_id: Dict[str, Dict[str, Any]] = {}
     for e in employees:
         for k in _emp_identifiers(e):
@@ -2903,139 +3087,385 @@ def render_kpis_module(
     self_q_by_tab = _get_all_self_questions(eff_org)
     peer_q_by_target = _get_all_peer_questions(eff_org)
 
-    # --- حالة المدير العام: تقارير التقييم لكل موظف وطباعة الجدول في ورقة مستقلة ---
+    # --- حالة المدير العام: تبويب تقييم الموظفين + تبويبات التقارير الأربعة ---
     if user_role == "general_manager":
-        st.markdown("#### 📋 تقارير التقييم للموظفين")
-        report_emps = [
-            e for e in employees
-            if (e.get("status") or "active") == "active"
-            and str(e.get("role") or "").strip().lower() != "general_manager"
-        ]
-        if not report_emps:
-            st.info("لا توجد تقييمات متاحة للموظفين حالياً.")
-            return
+        gm_tabs = st.tabs([
+            "👥 تقييم الموظفين",
+            "📄 تقرير تقييم الموظف",
+            "👨‍🔬 تقرير تقييم السينيور",
+            "👔 تقرير تقييم المدير المباشر",
+            "🏢 تقرير تقييم المدير العام",
+        ])
 
-        rep_emp_map = {f"{e.get('name_ar')} (#{e.get('employee_no')})": e for e in report_emps}
-        sel_rep_emp_lbl = st.selectbox("اختر الموظف لعرض تقرير التقييم", list(rep_emp_map.keys()), key="gm_kpi_rep_emp_sel")
-        target_rep_emp = rep_emp_map[sel_rep_emp_lbl]
-        t_emp_ids = _emp_identifiers(target_rep_emp)
-        has_senior_flag = bool(str(target_rep_emp.get("senior_id") or "").strip())
-
-        # جمع أحدث تقييم ذاتي للموظف، وتقييم السينيور، وتقييم المدير المباشر
-        self_eval_rec: Optional[Dict[str, Any]] = None
-        senior_eval_rec: Optional[Dict[str, Any]] = None
-        mgr_eval_rec: Optional[Dict[str, Any]] = None
-
-        for ev in kpi_evaluations:
-            if str(ev.get("employee_id") or "") not in t_emp_ids:
-                continue
-            st_ev = str(ev.get("status") or "").strip().lower()
-            lbl_ev = str(ev.get("period_label") or "")
-            if st_ev == "submitted_by_employee" or "ذاتي" in lbl_ev:
-                if self_eval_rec is None:
-                    self_eval_rec = ev
-            elif st_ev == "peer_senior_evaluated" or "سينيور" in lbl_ev:
-                if senior_eval_rec is None:
-                    senior_eval_rec = ev
-            elif st_ev in ("peer_manager_evaluated", "reviewed_by_manager") or "مدير مباشر" in lbl_ev:
-                if mgr_eval_rec is None:
-                    mgr_eval_rec = ev
-
-        self_scores_map: Dict[str, float] = (self_eval_rec or {}).get("self_scores") or {}
-        mgr_scores_map: Dict[str, float] = (mgr_eval_rec or {}).get("manager_scores") or {}
-        sen_scores_map: Dict[str, float] = (senior_eval_rec or {}).get("manager_scores") or {}
-
-        cat_for_emp = _map_job_title_to_self_tab(target_rep_emp)
-        base_q_list = [str(x.get("question") or "") for x in (self_q_by_tab.get(cat_for_emp) or []) if str(x.get("question") or "").strip()]
-        all_criteria_names = list(
-            dict.fromkeys(
-                base_q_list
-                + list(self_scores_map.keys())
-                + list(mgr_scores_map.keys())
-                + list(sen_scores_map.keys())
-            )
-        )
-
-        rows_data: List[Dict[str, Any]] = []
-        tot_self_val = 0.0
-        tot_sen_val = 0.0
-        tot_mgr_val = 0.0
-
-        for crit_q in all_criteria_names:
-            s_val = round_half_up_2(float(self_scores_map.get(crit_q) or 0.0))
-            m_val = round_half_up_2(float(mgr_scores_map.get(crit_q) or 0.0))
-            tot_self_val = round_half_up_2(tot_self_val + s_val)
-            tot_mgr_val = round_half_up_2(tot_mgr_val + m_val)
-
-            if has_senior_flag:
-                sn_val = round_half_up_2(float(sen_scores_map.get(crit_q) or 0.0))
-                tot_sen_val = round_half_up_2(tot_sen_val + sn_val)
-                rows_data.append({
-                    "بند التقييم": crit_q,
-                    "درجة تقييم الموظف لنفسه": s_val,
-                    "درجة تقييم السينيور": sn_val,
-                    "درجة تقييم المدير المباشر": m_val,
-                })
+        # 1) تقييم الموظفين للمدير العام (اختيار الاسم فقط -> تحديد الأسئلة تلقائياً حسب فئته)
+        with gm_tabs[0]:
+            st.markdown("#### تقييم الموظفين")
+            rateable_emps = [
+                e for e in employees
+                if (e.get("status") or "active") == "active"
+                and str(e.get("role") or "").strip().lower() != "general_manager"
+            ]
+            if not rateable_emps:
+                st.info("لا يوجد موظفون متاحون للتقييم حالياً.")
             else:
-                rows_data.append({
-                    "بند التقييم": crit_q,
-                    "درجة تقييم الموظف لنفسه": s_val,
-                    "درجة تقييم المدير المباشر": m_val,
-                })
+                remp_map = {f"{e.get('name_ar')} (#{e.get('employee_no')})": e for e in rateable_emps}
+                sel_remp_lbl = st.selectbox("اختر الموظف", list(remp_map.keys()), key="gm_rate_emp_sel")
+                picked_remp = remp_map[sel_remp_lbl]
+                remp_tab_cat = _map_job_title_to_self_tab(picked_remp)
+                st.caption(f"الموظف: **{picked_remp.get('name_ar')}** — الفئة المرتبطة: **`{remp_tab_cat}`**")
 
-        if has_senior_flag:
-            total_row = {
-                "بند التقييم": "الإجمالي",
-                "درجة تقييم الموظف لنفسه": tot_self_val,
-                "درجة تقييم السينيور": tot_sen_val,
-                "درجة تقييم المدير المباشر": tot_mgr_val,
-            }
-        else:
-            total_row = {
-                "بند التقييم": "الإجمالي",
-                "درجة تقييم الموظف لنفسه": tot_self_val,
-                "درجة تقييم المدير المباشر": tot_mgr_val,
-            }
+                rq_items = self_q_by_tab.get(remp_tab_cat) or []
+                max_r_pts = round_half_up_2(sum(float(item.get("points") or 0) for item in rq_items))
+                r_scores_map: Dict[str, float] = {}
 
-        st.markdown(f"#### الاسم: **{target_rep_emp.get('name_ar')}** — المسمى: `{target_rep_emp.get('job_title') or '—'}`")
-        st.dataframe(rows_data + [total_row], use_container_width=True, hide_index=True)
+                for idx_rq, item_rq in enumerate(rq_items):
+                    q_rq = str(item_rq.get("question") or "")
+                    pts_rq = max(0.5, float(item_rq.get("points") or 10.0))
+                    r_scores_map[q_rq] = float(
+                        st.slider(
+                            f"{q_rq} (الدرجة القصوى: {pts_rq:g})",
+                            min_value=0.0,
+                            max_value=float(pts_rq),
+                            value=float(min(pts_rq, round_half_up_2(pts_rq * 0.8))),
+                            step=0.5,
+                            key=f"gm_rate_sl_{picked_remp['id']}_{idx_rq}",
+                        )
+                    )
 
-        # تجهيز صفحة طباعة مستقلة للجدول وحده في ورقة منفصلة
-        table_headers_html = "".join(f"<th>{col_k}</th>" for col_k in total_row.keys())
-        body_rows_html = ""
-        for r_item in rows_data:
-            body_rows_html += "<tr>" + "".join(f"<td>{r_item[col_k]}</td>" for col_k in total_row.keys()) + "</tr>"
-        total_row_html = "<tr class='tot-row'>" + "".join(f"<td>{total_row[col_k]}</td>" for col_k in total_row.keys()) + "</tr>"
+                r_tot = round_half_up_2(sum(r_scores_map.values()))
+                r_pct = round_half_up_2((r_tot / max_r_pts) * 100.0) if max_r_pts > 0 else 0.0
+                gc1, gc2 = st.columns(2)
+                gc1.metric("مجموع الدرجات", f"{r_tot:g} / {max_r_pts:g}")
+                gc2.metric("النسبة المئوية", f"{r_pct:g}%")
 
-        printable_doc_json = json.dumps(
-            f"<!DOCTYPE html><html dir='rtl' lang='ar'><head><meta charset='utf-8'><title>تقرير تقييم - {target_rep_emp.get('name_ar')}</title>"
-            "<style>"
-            "body{font-family:'Cairo',Tahoma,sans-serif;direction:rtl;margin:28px;color:#0f172a;}"
-            ".emp-title{font-size:20px;font-weight:700;margin-bottom:14px;padding-bottom:8px;border-bottom:2px solid #0f4c5c;}"
-            "table{width:100%;border-collapse:collapse;margin-top:10px;}"
-            "th,td{border:1px solid #334155;padding:10px;text-align:center;font-size:14px;}"
-            "th{background:#f1f5f9;font-weight:700;}"
-            ".tot-row td{background:#e2e8f0;font-weight:700;font-size:15px;}"
-            "</style></head><body>"
-            f"<div class='emp-title'>اسم الموظف: {target_rep_emp.get('name_ar')} | الفترة: {period_lbl}</div>"
-            f"<table><thead><tr>{table_headers_html}</tr></thead><tbody>{body_rows_html}{total_row_html}</tbody></table>"
-            "</body></html>"
-        )
+                if st.button("💾 حفظ تقييم الموظف", type="primary", key=f"save_gm_rate_emp_{picked_remp['id']}"):
+                    upsert_record(
+                        "kpi_evaluations",
+                        {
+                            "employee_id": picked_remp["id"],
+                            "manager_id": user_id,
+                            "period_label": f"{period_lbl} | مدير عام ({remp_tab_cat})",
+                            "period_start": kpi_start_dt.isoformat(),
+                            "period_end": kpi_end_dt.isoformat(),
+                            "manager_scores": r_scores_map,
+                            "manager_percentage": r_pct,
+                            "status": "peer_manager_evaluated",
+                        },
+                        on_conflict="employee_id,period_label",
+                    )
+                    st.success(f"✅ تم حفظ تقييم الموظف {picked_remp.get('name_ar')} بنجاح.")
+                    st.rerun()
 
-        st.components.v1.html(
-            f"""
-            <div style="direction:rtl;text-align:right;margin-top:8px;">
-                <button onclick="var w=window.open('','_blank','width=900,height=700');w.document.write({printable_doc_json});w.document.close();w.focus();setTimeout(function(){{w.print();}},300);"
-                        style="background:#0f4c5c;color:#fff;border:none;border-radius:8px;padding:9px 18px;font-family:'Cairo',sans-serif;font-size:14px;font-weight:700;cursor:pointer;">
-                    🖨️ طباعة الجدول في ورقة مستقلة
-                </button>
-            </div>
-            """,
-            height=55,
-        )
+        # 2) تقرير تقييم الموظف + التفاصيل الكاملة للفترات (الإجازات، الجزاءات، المكافآت، السلف، الإضافي) + PDF
+        with gm_tabs[1]:
+            st.markdown("#### تقرير تقييم الموظف")
+            report_emps = [
+                e for e in employees
+                if (e.get("status") or "active") == "active"
+                and str(e.get("role") or "").strip().lower() != "general_manager"
+            ]
+            if not report_emps:
+                st.info("لا توجد بيانات موظفين متاحة.")
+            else:
+                rep_emp_map = {f"{e.get('name_ar')} (#{e.get('employee_no')})": e for e in report_emps}
+                sel_rep_emp_lbl = st.selectbox("اختر الموظف", list(rep_emp_map.keys()), key="gm_kpi_rep_emp_sel")
+                target_rep_emp = rep_emp_map[sel_rep_emp_lbl]
+                t_emp_ids = _emp_identifiers(target_rep_emp)
+                has_senior_flag = bool(str(target_rep_emp.get("senior_id") or "").strip())
+
+                self_eval_rec: Optional[Dict[str, Any]] = None
+                senior_eval_rec: Optional[Dict[str, Any]] = None
+                mgr_eval_rec: Optional[Dict[str, Any]] = None
+
+                for ev in kpi_evaluations:
+                    if str(ev.get("employee_id") or "") not in t_emp_ids:
+                        continue
+                    st_ev = str(ev.get("status") or "").strip().lower()
+                    lbl_ev = str(ev.get("period_label") or "")
+                    if st_ev == "submitted_by_employee" or "ذاتي" in lbl_ev:
+                        if self_eval_rec is None:
+                            self_eval_rec = ev
+                    elif st_ev == "peer_senior_evaluated" or "تقييم سينيور" in lbl_ev:
+                        if senior_eval_rec is None:
+                            senior_eval_rec = ev
+                    elif st_ev in ("peer_manager_evaluated", "reviewed_by_manager") or "مدير مباشر" in lbl_ev or "مدير عام" in lbl_ev:
+                        if mgr_eval_rec is None:
+                            mgr_eval_rec = ev
+
+                self_scores_map: Dict[str, float] = (self_eval_rec or {}).get("self_scores") or {}
+                mgr_scores_map: Dict[str, float] = (mgr_eval_rec or {}).get("manager_scores") or {}
+                sen_scores_map: Dict[str, float] = (senior_eval_rec or {}).get("manager_scores") or {}
+
+                cat_for_emp = _map_job_title_to_self_tab(target_rep_emp)
+                base_q_list = [str(x.get("question") or "") for x in (self_q_by_tab.get(cat_for_emp) or []) if str(x.get("question") or "").strip()]
+                all_criteria_names = list(
+                    dict.fromkeys(
+                        base_q_list
+                        + list(self_scores_map.keys())
+                        + list(mgr_scores_map.keys())
+                        + list(sen_scores_map.keys())
+                    )
+                )
+
+                rows_data: List[Dict[str, Any]] = []
+                tot_self_val = 0.0
+                tot_sen_val = 0.0
+                tot_mgr_val = 0.0
+
+                for crit_q in all_criteria_names:
+                    s_val = round_half_up_2(float(self_scores_map.get(crit_q) or 0.0))
+                    m_val = round_half_up_2(float(mgr_scores_map.get(crit_q) or 0.0))
+                    tot_self_val = round_half_up_2(tot_self_val + s_val)
+                    tot_mgr_val = round_half_up_2(tot_mgr_val + m_val)
+
+                    if has_senior_flag:
+                        sn_val = round_half_up_2(float(sen_scores_map.get(crit_q) or 0.0))
+                        tot_sen_val = round_half_up_2(tot_sen_val + sn_val)
+                        rows_data.append({
+                            "بند التقييم": crit_q,
+                            "تقييم الموظف لنفسه": s_val,
+                            "تقييم السينيور": sn_val,
+                            "تقييم المدير المباشر": m_val,
+                        })
+                    else:
+                        rows_data.append({
+                            "بند التقييم": crit_q,
+                            "تقييم الموظف لنفسه": s_val,
+                            "تقييم المدير المباشر": m_val,
+                        })
+
+                if has_senior_flag:
+                    total_row: Dict[str, Any] = {
+                        "بند التقييم": "الإجمالي",
+                        "تقييم الموظف لنفسه": tot_self_val,
+                        "تقييم السينيور": tot_sen_val,
+                        "تقييم المدير المباشر": tot_mgr_val,
+                    }
+                else:
+                    total_row = {
+                        "بند التقييم": "الإجمالي",
+                        "تقييم الموظف لنفسه": tot_self_val,
+                        "تقييم المدير المباشر": tot_mgr_val,
+                    }
+
+                st.markdown(f"### الاسم: {target_rep_emp.get('name_ar')}")
+                st.dataframe(rows_data + [total_row], use_container_width=True, hide_index=True)
+
+                det = _build_detailed_employee_kpi_breakdown(
+                    emp=target_rep_emp,
+                    start_date=kpi_start_dt,
+                    end_date=kpi_end_dt,
+                    leave_requests=leave_requests,
+                    attendance_logs=attendance_logs,
+                    penalties_rewards=penalties_rewards,
+                    advances=advances,
+                )
+
+                st.divider()
+                st.markdown("#### 📌 تفصيل الإجازات والجزاءات والمكافآت والسلف والإضافي خلال فترة التقييم")
+
+                l_m1, l_m2, l_m3, l_m4 = st.columns(4)
+                l_m1.metric("إجمالي أيام الإجازات", det["total_leave_days"])
+                l_m2.metric("العارضة (أيام)", det["casual_days"])
+                l_m3.metric("الاعتيادي (أيام)", det["regular_days"])
+                l_m4.metric("أيام إضافي معتمد", det["total_ot_days"])
+
+                if det["leave_items"]:
+                    st.markdown("**تفصيل كل إجازة:**")
+                    st.dataframe(det["leave_items"], use_container_width=True, hide_index=True)
+
+                all_months_seen = sorted(
+                    set(det["leaves_by_month"].keys())
+                    | set(det["penalties_by_month"].keys())
+                    | set(det["rewards_by_month"].keys())
+                    | set(det["advances_by_month"].keys())
+                    | set(det["ot_days_by_month"].keys())
+                )
+                if all_months_seen:
+                    st.markdown("**التوزيع الشهري خلال فترة التقييم:**")
+                    monthly_breakdown_rows = [
+                        {
+                            "الشهر": ym_k,
+                            "إجازات (يوم)": det["leaves_by_month"].get(ym_k, 0.0),
+                            "جزاءات (عدد)": det["penalties_by_month"].get(ym_k, 0),
+                            "مكافآت (عدد)": det["rewards_by_month"].get(ym_k, 0),
+                            "سلف (ج)": det["advances_by_month"].get(ym_k, 0.0),
+                            "إضافي (أيام / دقيقة)": f"{det['ot_days_by_month'].get(ym_k, 0)} يوم / {det['ot_mins_by_month'].get(ym_k, 0)} د",
+                        }
+                        for ym_k in all_months_seen
+                    ]
+                    st.dataframe(monthly_breakdown_rows, use_container_width=True, hide_index=True)
+
+                st.caption(
+                    f"إجمالي الجزاءات: **{det['penalties_total_cnt']}** | "
+                    f"إجمالي المكافآت: **{det['rewards_total_cnt']}** | "
+                    f"إجمالي السلف: **{det['advances_total_amt']:,.2f} ج** | "
+                    f"إجمالي الإضافي: **{det['total_ot_days']} يوم ({det['total_ot_mins']} دقيقة)**"
+                )
+
+                # طباعة الجدول في ورقة مستقلة + تصدير PDF
+                t_hdr_html = "".join(f"<th>{c_k}</th>" for c_k in total_row.keys())
+                t_bdy_html = "".join(
+                    "<tr>" + "".join(f"<td>{r_i[c_k]}</td>" for c_k in total_row.keys()) + "</tr>"
+                    for r_i in rows_data
+                )
+                t_tot_html = "<tr class='tot-row'>" + "".join(f"<td>{total_row[c_k]}</td>" for c_k in total_row.keys()) + "</tr>"
+
+                print_doc_json = json.dumps(
+                    f"<!DOCTYPE html><html dir='rtl' lang='ar'><head><meta charset='utf-8'><title>{target_rep_emp.get('name_ar')}</title>"
+                    "<style>"
+                    "body{font-family:'Cairo',Tahoma,sans-serif;direction:rtl;margin:28px;color:#0f172a;}"
+                    ".hdr{font-size:20px;font-weight:700;margin-bottom:14px;padding-bottom:8px;border-bottom:2px solid #0f4c5c;}"
+                    "table{width:100%;border-collapse:collapse;margin-top:10px;}"
+                    "th,td{border:1px solid #334155;padding:10px;text-align:center;font-size:14px;}"
+                    "th{background:#f1f5f9;font-weight:700;}"
+                    ".tot-row td{background:#e2e8f0;font-weight:700;font-size:15px;}"
+                    "</style></head><body>"
+                    f"<div class='hdr'>الاسم: {target_rep_emp.get('name_ar')} | الفترة: {period_lbl}</div>"
+                    f"<table><thead><tr>{t_hdr_html}</tr></thead><tbody>{t_bdy_html}{t_tot_html}</tbody></table>"
+                    "</body></html>"
+                )
+
+                p_col_a, p_col_b = st.columns([1.5, 1.5])
+                with p_col_a:
+                    st.components.v1.html(
+                        f"""
+                        <div style="direction:rtl;text-align:right;">
+                            <button onclick="var w=window.open('','_blank','width=900,height=700');w.document.write({print_doc_json});w.document.close();w.focus();setTimeout(function(){{w.print();}},300);"
+                                    style="background:#0f4c5c;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-family:'Cairo',sans-serif;font-size:14px;font-weight:700;cursor:pointer;">
+                                🖨️ طباعة الجدول في ورقة مستقلة
+                            </button>
+                        </div>
+                        """,
+                        height=50,
+                    )
+                with p_col_b:
+                    pdf_lines = [
+                        f"Employee: {target_rep_emp.get('employee_no', '')}",
+                        f"Period: {kpi_start_dt.isoformat()} to {kpi_end_dt.isoformat()}",
+                        f"Self Total: {tot_self_val:g} | Manager Total: {tot_mgr_val:g}" + (f" | Senior Total: {tot_sen_val:g}" if has_senior_flag else ""),
+                        f"Leaves: {det['total_leave_days']} (Casual: {det['casual_days']}, Regular: {det['regular_days']})",
+                        f"Penalties Count: {det['penalties_total_cnt']} | Rewards Count: {det['rewards_total_cnt']}",
+                        f"Advances Total: {det['advances_total_amt']:g} | Overtime Days: {det['total_ot_days']}",
+                    ]
+                    for idx_c, r_c in enumerate(rows_data, start=1):
+                        pdf_lines.append(
+                            f"Q{idx_c}: Self={r_c['تقييم الموظف لنفسه']} | Mgr={r_c['تقييم المدير المباشر']}"
+                            + (f" | Sen={r_c['تقييم السينيور']}" if has_senior_flag else "")
+                        )
+                    pdf_bytes = _build_simple_pdf_bytes(f"KPI Report - {target_rep_emp.get('employee_no', '')}", pdf_lines)
+                    st.download_button(
+                        "📄 تصدير PDF",
+                        data=pdf_bytes,
+                        file_name=f"kpi_report_{target_rep_emp.get('employee_no', 'emp')}.pdf",
+                        mime="application/pdf",
+                        key=f"dl_kpi_pdf_{target_rep_emp['id']}",
+                    )
+
+        # 3، 4، 5) تقارير تقييم السينيور / المدير المباشر / المدير العام
+        peer_report_specs = [
+            (2, "senior", "تقرير تقييم السينيور"),
+            (3, "manager", "تقرير تقييم المدير المباشر"),
+            (4, "gm", "تقرير تقييم المدير العام"),
+        ]
+        for tab_i, p_key, p_title in peer_report_specs:
+            with gm_tabs[tab_i]:
+                st.markdown(f"#### {p_title}")
+                p_qs = peer_q_by_target.get(p_key) or []
+                q_names = [str(x.get("question") or "") for x in p_qs if str(x.get("question") or "").strip()]
+
+                # جمع التقييمات المقدمة من الموظفين لهذه الجهة
+                raters_map: Dict[str, Dict[str, float]] = {}
+                for ev in kpi_evaluations:
+                    lbl_e = str(ev.get("period_label") or "")
+                    st_e = str(ev.get("status") or "").strip().lower()
+                    matches_target = (
+                        (p_key == "senior" and ("تقييم سينيور" in lbl_e or st_e == "peer_senior_evaluated"))
+                        or (p_key == "manager" and ("تقييم مدير مباشر" in lbl_e or st_e == "peer_manager_evaluated"))
+                        or (p_key == "gm" and ("تقييم مدير عام" in lbl_e or st_e == "peer_gm_evaluated"))
+                    )
+                    if not matches_target:
+                        continue
+                    rater_id = str(ev.get("manager_id") or "")
+                    rater_emp = emp_by_any_id.get(rater_id)
+                    rater_name = (rater_emp.get("name_ar") if rater_emp else None) or f"مقيّم ({rater_id[:6]})"
+                    sc_dict = ev.get("manager_scores") or {}
+                    if isinstance(sc_dict, dict) and rater_name not in raters_map:
+                        raters_map[rater_name] = {str(k): float(v or 0.0) for k, v in sc_dict.items()}
+                        for k_s in sc_dict.keys():
+                            if str(k_s) not in q_names:
+                                q_names.append(str(k_s))
+
+                if not raters_map:
+                    st.info("لا توجد تقييمات مسجلة من الموظفين لهذه الجهة بعد.")
+                else:
+                    rater_names_list = list(raters_map.keys())
+                    matrix_rows: List[Dict[str, Any]] = []
+                    rater_totals: Dict[str, float] = {rn: 0.0 for rn in rater_names_list}
+
+                    for q_item_name in q_names:
+                        row_obj: Dict[str, Any] = {"البند": q_item_name}
+                        for rn in rater_names_list:
+                            val_r = round_half_up_2(float(raters_map[rn].get(q_item_name) or 0.0))
+                            row_obj[rn] = val_r
+                            rater_totals[rn] = round_half_up_2(rater_totals[rn] + val_r)
+                        matrix_rows.append(row_obj)
+
+                    grand_total_all = round_half_up_2(sum(rater_totals.values()))
+                    tot_row_obj: Dict[str, Any] = {"البند": "الإجمالي"}
+                    for rn in rater_names_list:
+                        tot_row_obj[rn] = rater_totals[rn]
+                    matrix_rows.append(tot_row_obj)
+
+                    st.dataframe(matrix_rows, use_container_width=True, hide_index=True)
+                    st.metric("الإجمالي الكلي", f"{grand_total_all:g}")
+
+                    p_hdr_html = "".join(f"<th>{c_k}</th>" for c_k in matrix_rows[0].keys())
+                    p_bdy_html = "".join(
+                        "<tr>" + "".join(f"<td>{r_o[c_k]}</td>" for c_k in matrix_rows[0].keys()) + "</tr>"
+                        for r_o in matrix_rows
+                    )
+                    p_doc_json = json.dumps(
+                        f"<!DOCTYPE html><html dir='rtl' lang='ar'><head><meta charset='utf-8'><title>{p_title}</title>"
+                        "<style>"
+                        "body{font-family:'Cairo',Tahoma,sans-serif;direction:rtl;margin:28px;color:#0f172a;}"
+                        ".hdr{font-size:20px;font-weight:700;margin-bottom:14px;padding-bottom:8px;border-bottom:2px solid #0f4c5c;}"
+                        "table{width:100%;border-collapse:collapse;margin-top:10px;}"
+                        "th,td{border:1px solid #334155;padding:10px;text-align:center;font-size:14px;}"
+                        "th{background:#f1f5f9;font-weight:700;}"
+                        "</style></head><body>"
+                        f"<div class='hdr'>{p_title} | الفترة: {period_lbl} | الإجمالي الكلي: {grand_total_all:g}</div>"
+                        f"<table><thead><tr>{p_hdr_html}</tr></thead><tbody>{p_bdy_html}</tbody></table>"
+                        "</body></html>"
+                    )
+                    pc_1, pc_2 = st.columns([1.5, 1.5])
+                    with pc_1:
+                        st.components.v1.html(
+                            f"""
+                            <div style="direction:rtl;text-align:right;">
+                                <button onclick="var w=window.open('','_blank','width=950,height=700');w.document.write({p_doc_json});w.document.close();w.focus();setTimeout(function(){{w.print();}},300);"
+                                        style="background:#0f4c5c;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-family:'Cairo',sans-serif;font-size:14px;font-weight:700;cursor:pointer;">
+                                    🖨️ طباعة التقرير في ورقة مستقلة
+                                </button>
+                            </div>
+                            """,
+                            height=50,
+                        )
+                    with pc_2:
+                        p_pdf_lines = [f"Total Raters: {len(rater_names_list)} | Grand Total: {grand_total_all:g}"]
+                        for rn in rater_names_list:
+                            p_pdf_lines.append(f"Rater Total: {rater_totals[rn]:g}")
+                        p_pdf_bytes = _build_simple_pdf_bytes(p_key.upper(), p_pdf_lines)
+                        st.download_button(
+                            "📄 تصدير PDF",
+                            data=p_pdf_bytes,
+                            file_name=f"kpi_{p_key}_report.pdf",
+                            mime="application/pdf",
+                            key=f"dl_peer_pdf_{p_key}",
+                        )
         return
 
-    # --- تحديد التبويبات للمستخدمين غير المدير العام ---
+    # --- المستخدمون غير المدير العام ---
     has_my_senior = bool(str(current_user.get("senior_id") or "").strip())
     my_mgr_id_str = str(current_user.get("direct_manager_id") or "").strip()
     my_mgr_emp = emp_by_any_id.get(my_mgr_id_str)
@@ -3175,7 +3605,7 @@ def render_kpis_module(
                     st.rerun()
         st_idx += 1
 
-    # 3) تقييم الموظفين (للمدير المباشر: فلتر بالموظفين التابعين + اختيار فئة الموظف ووضع درجاته)
+    # 3) تقييم الموظفين (للمدير المباشر: اختيار الاسم فقط -> تحديد الأسئلة تلقائياً حسب المسمى الوظيفي للموظف)
     if user_role == "manager":
         with sub_tabs[st_idx]:
             st.markdown("#### تقييم الموظفين التابعين")
@@ -3186,16 +3616,10 @@ def render_kpis_module(
                 sub_map = {f"{e.get('name_ar')} (#{e.get('employee_no')})": e for e in subs_list}
                 sel_sub_lbl = st.selectbox("اختر الموظف", list(sub_map.keys()), key="mgr_rate_sub_emp_sel")
                 picked_sub_emp = sub_map[sel_sub_lbl]
+                auto_sub_cat = _map_job_title_to_self_tab(picked_sub_emp)
+                st.caption(f"الموظف: **{picked_sub_emp.get('name_ar')}** — الأسئلة المرتبطة تلقائياً: **`{auto_sub_cat}`**")
 
-                default_sub_cat = _map_job_title_to_self_tab(picked_sub_emp)
-                sel_sub_cat = st.selectbox(
-                    "فئة الأسئلة حسب درجة الموظف",
-                    KPI_SELF_TABS,
-                    index=KPI_SELF_TABS.index(default_sub_cat) if default_sub_cat in KPI_SELF_TABS else 0,
-                    key=f"mgr_rate_sub_cat_{picked_sub_emp['id']}",
-                )
-
-                sub_q_items = self_q_by_tab.get(sel_sub_cat) or []
+                sub_q_items = self_q_by_tab.get(auto_sub_cat) or []
                 max_sub_pts = round_half_up_2(sum(float(item.get("points") or 0) for item in sub_q_items))
                 sub_scores_map: Dict[str, float] = {}
 
@@ -3209,7 +3633,7 @@ def render_kpis_module(
                             max_value=float(pts_sq),
                             value=float(min(pts_sq, round_half_up_2(pts_sq * 0.8))),
                             step=0.5,
-                            key=f"mgr_rate_sub_sl_{picked_sub_emp['id']}_{sel_sub_cat}_{idx_sq}",
+                            key=f"mgr_rate_sub_sl_{picked_sub_emp['id']}_{auto_sub_cat}_{idx_sq}",
                         )
                     )
 
@@ -3225,7 +3649,7 @@ def render_kpis_module(
                         {
                             "employee_id": picked_sub_emp["id"],
                             "manager_id": user_id,
-                            "period_label": f"{period_lbl} | مدير مباشر ({sel_sub_cat})",
+                            "period_label": f"{period_lbl} | مدير مباشر ({auto_sub_cat})",
                             "period_start": kpi_start_dt.isoformat(),
                             "period_end": kpi_end_dt.isoformat(),
                             "manager_scores": sub_scores_map,
