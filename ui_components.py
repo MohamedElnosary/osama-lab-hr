@@ -141,10 +141,20 @@ DEFAULT_PEER_QUESTIONS_BY_TARGET: Dict[str, List[Dict[str, Any]]] = {
 }
 
 
+def _get_effective_org_state(org_settings: Dict[str, Any]) -> Dict[str, Any]:
+    """دمج إعدادات قاعدة البيانات مع أحدث التعديلات الحية في session_state."""
+    base = dict(org_settings or {})
+    live_patch = st.session_state.get("live_org_patch")
+    if isinstance(live_patch, dict):
+        base.update(live_patch)
+    return base
+
+
 def _save_org_settings_patch(patch: Dict[str, Any]) -> None:
-    """حفظ تحديثات إعدادات المنظمة في قاعدة البيانات وفي session_state."""
-    for k, v in patch.items():
-        st.session_state[f"org_cache_{k}"] = v
+    """حفظ تحديثات إعدادات المنظمة في الحالة الحية وفي قاعدة البيانات."""
+    cur_live = dict(st.session_state.get("live_org_patch") or {})
+    cur_live.update(patch)
+    st.session_state["live_org_patch"] = cur_live
     try:
         existing_rows = fetch_table("org_settings", limit=5)
         if existing_rows and existing_rows[0].get("id") is not None:
@@ -175,13 +185,8 @@ def _normalize_q_list(raw_list: Any, fallback_list: List[Dict[str, Any]]) -> Lis
 
 
 def _get_all_self_questions(org_settings: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
-    if "org_cache_kpi_self_questions" in st.session_state and isinstance(st.session_state["org_cache_kpi_self_questions"], dict):
-        saved = st.session_state["org_cache_kpi_self_questions"]
-    else:
-        saved = org_settings.get("kpi_self_questions")
-        if isinstance(saved, dict):
-            st.session_state["org_cache_kpi_self_questions"] = saved
-
+    eff_org = _get_effective_org_state(org_settings)
+    saved = eff_org.get("kpi_self_questions")
     out: Dict[str, List[Dict[str, Any]]] = {}
     for tab_k in KPI_SELF_TABS:
         fb = DEFAULT_SELF_QUESTIONS_BY_TAB.get(tab_k, [])
@@ -193,13 +198,8 @@ def _get_all_self_questions(org_settings: Dict[str, Any]) -> Dict[str, List[Dict
 
 
 def _get_all_peer_questions(org_settings: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
-    if "org_cache_kpi_peer_questions_v2" in st.session_state and isinstance(st.session_state["org_cache_kpi_peer_questions_v2"], dict):
-        saved = st.session_state["org_cache_kpi_peer_questions_v2"]
-    else:
-        saved = org_settings.get("kpi_peer_questions_v2")
-        if isinstance(saved, dict):
-            st.session_state["org_cache_kpi_peer_questions_v2"] = saved
-
+    eff_org = _get_effective_org_state(org_settings)
+    saved = eff_org.get("kpi_peer_questions_v2")
     out: Dict[str, List[Dict[str, Any]]] = {}
     for key_p in ("senior", "manager", "gm"):
         fb = DEFAULT_PEER_QUESTIONS_BY_TARGET.get(key_p, [])
@@ -275,12 +275,74 @@ def _map_job_title_to_self_tab(emp: Dict[str, Any]) -> str:
     return "استقبال"
 
 
+def _compute_kpi_period_metrics(
+    emp: Dict[str, Any],
+    start_date: date,
+    end_date: date,
+    leave_requests: List[Dict[str, Any]],
+    attendance_logs: List[Dict[str, Any]],
+    penalties_rewards: List[Dict[str, Any]],
+    advances: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """حساب ملخص الآلي لأداء الفترة: أيام الإجازات، مرات التأخير، إضافي معتمد (أيام)، المكافآت (عدد المرات)، الجزاءات (عدد المرات)، السلف."""
+    base_sum = build_employee_period_summary(
+        employee=emp,
+        start_date=start_date,
+        end_date=end_date,
+        leave_requests=leave_requests,
+        attendance_logs=attendance_logs,
+        penalties_rewards=penalties_rewards,
+        advances=advances,
+    )
+    emp_ids = _emp_identifiers(emp)
+
+    approved_ot_days = 0
+    seen_ot_days = set()
+    for att in attendance_logs:
+        if str(att.get("employee_id") or "") not in emp_ids:
+            continue
+        w_dt = parse_date_safe(att.get("work_date"))
+        if not w_dt or not (start_date <= w_dt <= end_date):
+            continue
+        ot_m = int(att.get("overtime_minutes") or 0)
+        ot_s = str(att.get("overtime_status") or "").strip().lower()
+        if ot_m > 0 and ot_s == "approved":
+            d_key = w_dt.isoformat()
+            if d_key not in seen_ot_days:
+                seen_ot_days.add(d_key)
+                approved_ot_days += 1
+
+    rewards_count = 0
+    penalties_count = 0
+    for pr in penalties_rewards:
+        if str(pr.get("employee_id") or "") not in emp_ids:
+            continue
+        if str(pr.get("status") or "").strip().lower() != "approved":
+            continue
+        i_dt = parse_date_safe(pr.get("issue_date"))
+        if not i_dt or not (start_date <= i_dt <= end_date):
+            continue
+        etype = str(pr.get("entry_type") or "").strip().lower()
+        if etype == "reward":
+            rewards_count += 1
+        elif etype == "penalty":
+            penalties_count += 1
+
+    return {
+        "approved_leaves_days": base_sum["approved_leaves_days"],
+        "late_days_count": base_sum["late_days_count"],
+        "approved_ot_days": approved_ot_days,
+        "rewards_count": rewards_count,
+        "penalties_count": penalties_count,
+        "total_advances": base_sum["total_advances"],
+    }
+
+
 def _get_fixed_allowance_types(org_settings: Dict[str, Any]) -> List[str]:
     """إرجاع قائمة أنواع المكافآت الثابتة المتاحة (الافتراضية + المضافة من المستخدم)."""
+    eff_org = _get_effective_org_state(org_settings)
     merged: List[str] = list(DEFAULT_FIXED_ALLOWANCE_TYPES)
-    custom_list = st.session_state.get("org_cache_fixed_allowance_types")
-    if custom_list is None:
-        custom_list = org_settings.get("fixed_allowance_types")
+    custom_list = eff_org.get("fixed_allowance_types")
     if isinstance(custom_list, list):
         for item in custom_list:
             lbl = str(item or "").strip()
@@ -2819,35 +2881,25 @@ def render_kpis_module(
         for k in _emp_identifiers(e):
             emp_by_any_id[k] = e
 
-    kpi_active = bool(st.session_state.get("org_cache_kpi_evaluation_active", org_settings.get("kpi_evaluation_active", False)))
-    eval_cycle_type = str(st.session_state.get("org_cache_kpi_cycle_type") or org_settings.get("kpi_cycle_type") or "نصف سنوي")
-    kpi_start_dt_str = str(st.session_state.get("org_cache_kpi_start_date") or org_settings.get("kpi_start_date") or date.today().isoformat())[:10]
-    period_lbl = f"{eval_cycle_type} — يبدأ من {kpi_start_dt_str}"
+    eff_org = _get_effective_org_state(org_settings)
+    kpi_active = bool(eff_org.get("kpi_evaluation_active", False))
+    eval_cycle_type = str(eff_org.get("kpi_cycle_type") or "نصف سنوي")
+    kpi_start_dt = parse_date_safe(eff_org.get("kpi_start_date")) or date(date.today().year, 1, 1)
+    kpi_end_dt = parse_date_safe(eff_org.get("kpi_end_date")) or date.today()
+    period_lbl = f"{eval_cycle_type} ({kpi_start_dt.isoformat()} إلى {kpi_end_dt.isoformat()})"
 
     if not kpi_active and user_role not in ("general_manager", "hr"):
         st.warning("فترة تقييم الأداء (KPIs) غير مفعّلة حالياً.")
         return
 
-    st.caption(f"فترة التقييم الحالية: **{eval_cycle_type}** | تاريخ البداية: **`{kpi_start_dt_str}`**")
+    st.caption(
+        f"نوع التقييم: **{eval_cycle_type}** | بداية التقييم: **`{kpi_start_dt.isoformat()}`** | "
+        f"نهاية التقييم: **`{kpi_end_dt.isoformat()}`**"
+    )
 
-    self_q_by_tab = _get_all_self_questions(org_settings)
-    peer_q_by_target = _get_all_peer_questions(org_settings)
-
+    self_q_by_tab = _get_all_self_questions(eff_org)
+    peer_q_by_target = _get_all_peer_questions(eff_org)
     mapped_tab = _map_job_title_to_self_tab(current_user)
-    sel_self_tab = st.selectbox(
-        "فئة الأسئلة للتقييم الذاتي (المرتبطة بالمسمى الوظيفي)",
-        KPI_SELF_TABS,
-        index=KPI_SELF_TABS.index(mapped_tab) if mapped_tab in KPI_SELF_TABS else 0,
-        key="kpi_user_self_tab_sel",
-    )
-
-    p_col1, p_col2 = st.columns(2)
-    p_start = p_col1.date_input(
-        "من تاريخ (لفترة السجل الآلي)",
-        value=parse_date_safe(kpi_start_dt_str) or date(date.today().year, 1, 1),
-        key="kpi_auto_from",
-    )
-    p_end = p_col2.date_input("إلى تاريخ", value=date.today(), key="kpi_auto_to")
 
     sub_tabs = st.tabs([
         "🙋 تقييم نفسي",
@@ -2857,8 +2909,8 @@ def render_kpis_module(
     ])
 
     with sub_tabs[0]:
-        st.markdown(f"#### التقييم الذاتي — **{sel_self_tab}**")
-        q_items = self_q_by_tab.get(sel_self_tab) or []
+        st.markdown(f"#### التقييم الذاتي — **{mapped_tab}**")
+        q_items = self_q_by_tab.get(mapped_tab) or []
         max_possible = round_half_up_2(sum(float(item.get("points") or 0) for item in q_items))
         self_scores: Dict[str, float] = {}
 
@@ -2871,7 +2923,7 @@ def render_kpis_module(
                 max_value=float(q_pts),
                 value=float(min(q_pts, round_half_up_2(q_pts * 0.8))),
                 step=0.5,
-                key=f"kpi_self_sl_{user_id}_{sel_self_tab}_{idx_q}",
+                key=f"kpi_self_sl_{user_id}_{mapped_tab}_{idx_q}",
             )
             self_scores[q_label] = float(val_q)
 
@@ -2883,11 +2935,11 @@ def render_kpis_module(
         m2.metric("النسبة المئوية", f"{self_pct:g}%")
 
         st.divider()
-        st.markdown("##### 📊 ملخص الأداء الآلي للفترة")
-        auto_sum = build_employee_period_summary(
-            employee=current_user,
-            start_date=p_start,
-            end_date=p_end,
+        st.markdown("##### 📊 ملخص الآلي لأداء الفترة")
+        auto_sum = _compute_kpi_period_metrics(
+            emp=current_user,
+            start_date=kpi_start_dt,
+            end_date=kpi_end_dt,
             leave_requests=leave_requests,
             attendance_logs=attendance_logs,
             penalties_rewards=penalties_rewards,
@@ -2896,10 +2948,10 @@ def render_kpis_module(
         s1, s2, s3, s4, s5, s6 = st.columns(6)
         s1.metric("أيام الإجازات", auto_sum["approved_leaves_days"])
         s2.metric("مرات التأخير", auto_sum["late_days_count"])
-        s3.metric("دقائق التأخير", auto_sum["total_late_minutes"])
-        s4.metric("إضافي معتمد (د)", auto_sum["approved_overtime_minutes"])
-        s5.metric("المكافآت", f"{auto_sum['total_rewards']} ج")
-        s6.metric("الجزاءات / السلف", f"{auto_sum['total_penalties']} / {auto_sum['total_advances']} ج")
+        s3.metric("إضافي معتمد (أيام)", auto_sum["approved_ot_days"])
+        s4.metric("المكافآت (عدد المرات)", auto_sum["rewards_count"])
+        s5.metric("الجزاءات (عدد المرات)", auto_sum["penalties_count"])
+        s6.metric("السلف", f"{auto_sum['total_advances']:,.2f} ج")
 
         if st.button("💾 حفظ التقييم الذاتي", type="primary", key="save_kpi_self_btn"):
             upsert_record(
@@ -2907,9 +2959,9 @@ def render_kpis_module(
                 {
                     "employee_id": current_user["id"],
                     "manager_id": user_id,
-                    "period_label": f"{period_lbl} | ذاتي ({sel_self_tab})",
-                    "period_start": p_start.isoformat(),
-                    "period_end": p_end.isoformat(),
+                    "period_label": f"{period_lbl} | ذاتي ({mapped_tab})",
+                    "period_start": kpi_start_dt.isoformat(),
+                    "period_end": kpi_end_dt.isoformat(),
                     "self_scores": self_scores,
                     "self_percentage": self_pct,
                     "auto_summary": auto_sum,
@@ -2963,8 +3015,8 @@ def render_kpis_module(
                         "employee_id": sen_emp["id"],
                         "manager_id": user_id,
                         "period_label": f"{period_lbl} | تقييم سينيور بواسطة {current_user.get('name_ar')}",
-                        "period_start": p_start.isoformat(),
-                        "period_end": p_end.isoformat(),
+                        "period_start": kpi_start_dt.isoformat(),
+                        "period_end": kpi_end_dt.isoformat(),
                         "manager_scores": sen_scores,
                         "manager_percentage": sen_pct,
                         "status": "peer_senior_evaluated",
@@ -3009,8 +3061,8 @@ def render_kpis_module(
                         "employee_id": mgr_emp["id"],
                         "manager_id": user_id,
                         "period_label": f"{period_lbl} | تقييم مدير مباشر بواسطة {current_user.get('name_ar')}",
-                        "period_start": p_start.isoformat(),
-                        "period_end": p_end.isoformat(),
+                        "period_start": kpi_start_dt.isoformat(),
+                        "period_end": kpi_end_dt.isoformat(),
                         "manager_scores": mgr_scores_val,
                         "manager_percentage": mgr_pct,
                         "status": "peer_manager_evaluated",
@@ -3054,8 +3106,8 @@ def render_kpis_module(
                     "employee_id": gm_target_id,
                     "manager_id": user_id,
                     "period_label": f"{period_lbl} | تقييم مدير عام بواسطة {current_user.get('name_ar')}",
-                    "period_start": p_start.isoformat(),
-                    "period_end": p_end.isoformat(),
+                    "period_start": kpi_start_dt.isoformat(),
+                    "period_end": kpi_end_dt.isoformat(),
                     "manager_scores": gm_scores_val,
                     "manager_percentage": gm_pct,
                     "status": "peer_gm_evaluated",
@@ -3082,7 +3134,8 @@ def render_admin_and_staff(
     user_id = str(current_user.get("id"))
     user_role = (current_user.get("role") or "employee").lower()
     holidays_list = official_holidays or []
-    fa_types_list = _get_fixed_allowance_types(org_settings)
+    eff_org = _get_effective_org_state(org_settings)
+    fa_types_list = _get_fixed_allowance_types(eff_org)
 
     if not (perms.get("manage_settings") or perms.get("manage_payroll") or user_role in ("general_manager", "hr")):
         st.warning("هذا القسم مخصص للإدارة والموارد البشرية.")
@@ -3477,14 +3530,14 @@ def render_admin_and_staff(
         st.markdown("#### إعدادات النظام العامة")
         with st.form("org_settings_form"):
             oc1, oc2, oc3 = st.columns(3)
-            org_n = oc1.text_input("اسم المؤسسة", value=org_settings.get("org_name") or "معامل ا.د أسامة عبد المتعال منصور")
-            adm_y = oc2.text_input("السنة الإدارية", value=str(org_settings.get("admin_year") or "2026"))
-            def_a = oc3.number_input("الرصيد السنوي/الاعتيادي الافتراضي", min_value=1, max_value=90, value=int(org_settings.get("default_annual") or 15))
+            org_n = oc1.text_input("اسم المؤسسة", value=eff_org.get("org_name") or "معامل ا.د أسامة عبد المتعال منصور")
+            adm_y = oc2.text_input("السنة الإدارية", value=str(eff_org.get("admin_year") or "2026"))
+            def_a = oc3.number_input("الرصيد السنوي/الاعتيادي الافتراضي", min_value=1, max_value=90, value=int(eff_org.get("default_annual") or 15))
 
             oc4, oc5, oc6 = st.columns(3)
-            def_c = oc4.number_input("رصيد العارضة الافتراضي", min_value=0, max_value=30, value=int(org_settings.get("default_casual") or 6))
-            g_late = oc5.number_input("سماح الحضور (دقائق)", min_value=0, max_value=60, value=int(org_settings.get("grace_late_minutes") or 15))
-            g_early = oc6.number_input("سماح الانصراف (دقائق)", min_value=0, max_value=60, value=int(org_settings.get("grace_early_minutes") or 5))
+            def_c = oc4.number_input("رصيد العارضة الافتراضي", min_value=0, max_value=30, value=int(eff_org.get("default_casual") or 6))
+            g_late = oc5.number_input("سماح الحضور (دقائق)", min_value=0, max_value=60, value=int(eff_org.get("grace_late_minutes") or 15))
+            g_early = oc6.number_input("سماح الانصراف (دقائق)", min_value=0, max_value=60, value=int(eff_org.get("grace_early_minutes") or 5))
 
             if st.form_submit_button("حفظ الإعدادات", type="primary"):
                 _save_org_settings_patch({
@@ -3502,11 +3555,12 @@ def render_admin_and_staff(
     with tab_kpi_cfg:
         st.markdown("#### ⚙️ إعدادات الـ KPIs")
 
-        cur_cycle_val = str(st.session_state.get("org_cache_kpi_cycle_type") or org_settings.get("kpi_cycle_type") or "نصف سنوي")
-        cur_start_dt = parse_date_safe(st.session_state.get("org_cache_kpi_start_date") or org_settings.get("kpi_start_date")) or date.today()
-        cur_active_val = bool(st.session_state.get("org_cache_kpi_evaluation_active", org_settings.get("kpi_evaluation_active", False)))
+        cur_cycle_val = str(eff_org.get("kpi_cycle_type") or "نصف سنوي")
+        cur_start_dt = parse_date_safe(eff_org.get("kpi_start_date")) or date(date.today().year, 1, 1)
+        cur_end_dt = parse_date_safe(eff_org.get("kpi_end_date")) or date.today()
+        cur_active_val = bool(eff_org.get("kpi_evaluation_active", False))
 
-        kc1, kc2, kc3 = st.columns([2, 2, 1.5])
+        kc1, kc2, kc3, kc4 = st.columns([1.8, 1.8, 1.8, 1.3])
         with kc1:
             sel_cycle = st.selectbox(
                 "نوع التقييم",
@@ -3517,6 +3571,8 @@ def render_admin_and_staff(
         with kc2:
             sel_kpi_start = st.date_input("تاريخ بداية التقييم", value=cur_start_dt, key="kpi_cfg_start_dt")
         with kc3:
+            sel_kpi_end = st.date_input("تاريخ انتهاء التقييم", value=cur_end_dt, key="kpi_cfg_end_dt")
+        with kc4:
             st.write("")
             st.write("")
             sel_kpi_active = st.checkbox("تفعيل التقييم", value=cur_active_val, key="kpi_cfg_active_chk")
@@ -3524,8 +3580,9 @@ def render_admin_and_staff(
         if st.button("💾 حفظ إعدادات فترة التقييم", type="primary", key="save_kpi_cfg_period_btn"):
             _save_org_settings_patch({
                 "kpi_cycle_type": sel_cycle,
-                "kpi_period_label": f"{sel_cycle} ({sel_kpi_start.isoformat()})",
+                "kpi_period_label": f"{sel_cycle} ({sel_kpi_start.isoformat()} إلى {sel_kpi_end.isoformat()})",
                 "kpi_start_date": sel_kpi_start.isoformat(),
+                "kpi_end_date": sel_kpi_end.isoformat(),
                 "kpi_evaluation_active": bool(sel_kpi_active),
             })
             st.success("✅ تم حفظ إعدادات فترة التقييم.")
@@ -3534,8 +3591,8 @@ def render_admin_and_staff(
         st.divider()
         st.markdown("#### 📝 أسئلة التقييم")
 
-        self_q_all = _get_all_self_questions(org_settings)
-        peer_q_all = _get_all_peer_questions(org_settings)
+        self_q_all = _get_all_self_questions(eff_org)
+        peer_q_all = _get_all_peer_questions(eff_org)
         cfg_tabs = st.tabs(KPI_CONFIG_TABS)
 
         for idx_t, t_name in enumerate(KPI_CONFIG_TABS):
