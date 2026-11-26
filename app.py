@@ -91,7 +91,7 @@ def _ensure_bootstrap_gm(employees: List[Dict[str, Any]]) -> List[Dict[str, Any]
         {
             "employee_no": "1",
             "name_ar": "محمد النصيري عبده النصيري",
-            "job_title": "مدير عام المعامل",
+            "job_title": "مدير عام",
             "role": "general_manager",
             "hire_date": "2020-01-01",
             "base_salary": 15000,
