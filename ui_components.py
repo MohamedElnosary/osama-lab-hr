@@ -1,6 +1,7 @@
 from datetime import date, datetime, time, timedelta
 from typing import Any, Dict, List, Optional
 import io
+import json
 import pandas as pd
 import streamlit as st
 
@@ -2861,7 +2862,7 @@ def render_reports_module(
 
 
 # =====================================================================
-# 7. شاشة الـ KPIs
+# 7. شاشة الـ KPIs (أدوار وصلاحيات + تقييم الموظفين للمدير المباشر + تقارير وطباعة المدير العام)
 # =====================================================================
 def render_kpis_module(
     current_user: Dict[str, Any],
@@ -2875,7 +2876,9 @@ def render_kpis_module(
 ) -> None:
     st.markdown("### 🎯 تقييم الأداء (KPIs)")
     user_id = str(current_user.get("id"))
+    my_ids = _emp_identifiers(current_user)
     user_role = (current_user.get("role") or "employee").strip().lower()
+
     emp_by_any_id: Dict[str, Dict[str, Any]] = {}
     for e in employees:
         for k in _emp_identifiers(e):
@@ -2899,16 +2902,161 @@ def render_kpis_module(
 
     self_q_by_tab = _get_all_self_questions(eff_org)
     peer_q_by_target = _get_all_peer_questions(eff_org)
-    mapped_tab = _map_job_title_to_self_tab(current_user)
 
-    sub_tabs = st.tabs([
-        "🙋 تقييم نفسي",
-        "👨‍🔬 تقييم السينيور",
-        "👔 تقييم المدير المباشر",
-        "🏢 تقييم المدير العام",
-    ])
+    # --- حالة المدير العام: تقارير التقييم لكل موظف وطباعة الجدول في ورقة مستقلة ---
+    if user_role == "general_manager":
+        st.markdown("#### 📋 تقارير التقييم للموظفين")
+        report_emps = [
+            e for e in employees
+            if (e.get("status") or "active") == "active"
+            and str(e.get("role") or "").strip().lower() != "general_manager"
+        ]
+        if not report_emps:
+            st.info("لا توجد تقييمات متاحة للموظفين حالياً.")
+            return
 
-    with sub_tabs[0]:
+        rep_emp_map = {f"{e.get('name_ar')} (#{e.get('employee_no')})": e for e in report_emps}
+        sel_rep_emp_lbl = st.selectbox("اختر الموظف لعرض تقرير التقييم", list(rep_emp_map.keys()), key="gm_kpi_rep_emp_sel")
+        target_rep_emp = rep_emp_map[sel_rep_emp_lbl]
+        t_emp_ids = _emp_identifiers(target_rep_emp)
+        has_senior_flag = bool(str(target_rep_emp.get("senior_id") or "").strip())
+
+        # جمع أحدث تقييم ذاتي للموظف، وتقييم السينيور، وتقييم المدير المباشر
+        self_eval_rec: Optional[Dict[str, Any]] = None
+        senior_eval_rec: Optional[Dict[str, Any]] = None
+        mgr_eval_rec: Optional[Dict[str, Any]] = None
+
+        for ev in kpi_evaluations:
+            if str(ev.get("employee_id") or "") not in t_emp_ids:
+                continue
+            st_ev = str(ev.get("status") or "").strip().lower()
+            lbl_ev = str(ev.get("period_label") or "")
+            if st_ev == "submitted_by_employee" or "ذاتي" in lbl_ev:
+                if self_eval_rec is None:
+                    self_eval_rec = ev
+            elif st_ev == "peer_senior_evaluated" or "سينيور" in lbl_ev:
+                if senior_eval_rec is None:
+                    senior_eval_rec = ev
+            elif st_ev in ("peer_manager_evaluated", "reviewed_by_manager") or "مدير مباشر" in lbl_ev:
+                if mgr_eval_rec is None:
+                    mgr_eval_rec = ev
+
+        self_scores_map: Dict[str, float] = (self_eval_rec or {}).get("self_scores") or {}
+        mgr_scores_map: Dict[str, float] = (mgr_eval_rec or {}).get("manager_scores") or {}
+        sen_scores_map: Dict[str, float] = (senior_eval_rec or {}).get("manager_scores") or {}
+
+        cat_for_emp = _map_job_title_to_self_tab(target_rep_emp)
+        base_q_list = [str(x.get("question") or "") for x in (self_q_by_tab.get(cat_for_emp) or []) if str(x.get("question") or "").strip()]
+        all_criteria_names = list(
+            dict.fromkeys(
+                base_q_list
+                + list(self_scores_map.keys())
+                + list(mgr_scores_map.keys())
+                + list(sen_scores_map.keys())
+            )
+        )
+
+        rows_data: List[Dict[str, Any]] = []
+        tot_self_val = 0.0
+        tot_sen_val = 0.0
+        tot_mgr_val = 0.0
+
+        for crit_q in all_criteria_names:
+            s_val = round_half_up_2(float(self_scores_map.get(crit_q) or 0.0))
+            m_val = round_half_up_2(float(mgr_scores_map.get(crit_q) or 0.0))
+            tot_self_val = round_half_up_2(tot_self_val + s_val)
+            tot_mgr_val = round_half_up_2(tot_mgr_val + m_val)
+
+            if has_senior_flag:
+                sn_val = round_half_up_2(float(sen_scores_map.get(crit_q) or 0.0))
+                tot_sen_val = round_half_up_2(tot_sen_val + sn_val)
+                rows_data.append({
+                    "بند التقييم": crit_q,
+                    "درجة تقييم الموظف لنفسه": s_val,
+                    "درجة تقييم السينيور": sn_val,
+                    "درجة تقييم المدير المباشر": m_val,
+                })
+            else:
+                rows_data.append({
+                    "بند التقييم": crit_q,
+                    "درجة تقييم الموظف لنفسه": s_val,
+                    "درجة تقييم المدير المباشر": m_val,
+                })
+
+        if has_senior_flag:
+            total_row = {
+                "بند التقييم": "الإجمالي",
+                "درجة تقييم الموظف لنفسه": tot_self_val,
+                "درجة تقييم السينيور": tot_sen_val,
+                "درجة تقييم المدير المباشر": tot_mgr_val,
+            }
+        else:
+            total_row = {
+                "بند التقييم": "الإجمالي",
+                "درجة تقييم الموظف لنفسه": tot_self_val,
+                "درجة تقييم المدير المباشر": tot_mgr_val,
+            }
+
+        st.markdown(f"#### الاسم: **{target_rep_emp.get('name_ar')}** — المسمى: `{target_rep_emp.get('job_title') or '—'}`")
+        st.dataframe(rows_data + [total_row], use_container_width=True, hide_index=True)
+
+        # تجهيز صفحة طباعة مستقلة للجدول وحده في ورقة منفصلة
+        table_headers_html = "".join(f"<th>{col_k}</th>" for col_k in total_row.keys())
+        body_rows_html = ""
+        for r_item in rows_data:
+            body_rows_html += "<tr>" + "".join(f"<td>{r_item[col_k]}</td>" for col_k in total_row.keys()) + "</tr>"
+        total_row_html = "<tr class='tot-row'>" + "".join(f"<td>{total_row[col_k]}</td>" for col_k in total_row.keys()) + "</tr>"
+
+        printable_doc_json = json.dumps(
+            f"<!DOCTYPE html><html dir='rtl' lang='ar'><head><meta charset='utf-8'><title>تقرير تقييم - {target_rep_emp.get('name_ar')}</title>"
+            "<style>"
+            "body{font-family:'Cairo',Tahoma,sans-serif;direction:rtl;margin:28px;color:#0f172a;}"
+            ".emp-title{font-size:20px;font-weight:700;margin-bottom:14px;padding-bottom:8px;border-bottom:2px solid #0f4c5c;}"
+            "table{width:100%;border-collapse:collapse;margin-top:10px;}"
+            "th,td{border:1px solid #334155;padding:10px;text-align:center;font-size:14px;}"
+            "th{background:#f1f5f9;font-weight:700;}"
+            ".tot-row td{background:#e2e8f0;font-weight:700;font-size:15px;}"
+            "</style></head><body>"
+            f"<div class='emp-title'>اسم الموظف: {target_rep_emp.get('name_ar')} | الفترة: {period_lbl}</div>"
+            f"<table><thead><tr>{table_headers_html}</tr></thead><tbody>{body_rows_html}{total_row_html}</tbody></table>"
+            "</body></html>"
+        )
+
+        st.components.v1.html(
+            f"""
+            <div style="direction:rtl;text-align:right;margin-top:8px;">
+                <button onclick="var w=window.open('','_blank','width=900,height=700');w.document.write({printable_doc_json});w.document.close();w.focus();setTimeout(function(){{w.print();}},300);"
+                        style="background:#0f4c5c;color:#fff;border:none;border-radius:8px;padding:9px 18px;font-family:'Cairo',sans-serif;font-size:14px;font-weight:700;cursor:pointer;">
+                    🖨️ طباعة الجدول في ورقة مستقلة
+                </button>
+            </div>
+            """,
+            height=55,
+        )
+        return
+
+    # --- تحديد التبويبات للمستخدمين غير المدير العام ---
+    has_my_senior = bool(str(current_user.get("senior_id") or "").strip())
+    my_mgr_id_str = str(current_user.get("direct_manager_id") or "").strip()
+    my_mgr_emp = emp_by_any_id.get(my_mgr_id_str)
+    mgr_is_gm = bool(my_mgr_emp and str(my_mgr_emp.get("role") or "").strip().lower() == "general_manager")
+
+    user_sub_tabs: List[str] = ["🙋 تقييم نفسي"]
+    if has_my_senior:
+        user_sub_tabs.append("👨‍🔬 تقييم السينيور")
+    if user_role == "manager":
+        user_sub_tabs.append("👥 تقييم الموظفين")
+    if not mgr_is_gm and my_mgr_emp:
+        user_sub_tabs.append("👔 تقييم المدير المباشر")
+    if mgr_is_gm or user_role == "manager":
+        user_sub_tabs.append("🏢 تقييم المدير العام")
+
+    sub_tabs = st.tabs(user_sub_tabs)
+    st_idx = 0
+
+    # 1) تقييم نفسي
+    with sub_tabs[st_idx]:
+        mapped_tab = _map_job_title_to_self_tab(current_user)
         st.markdown(f"#### التقييم الذاتي — **{mapped_tab}**")
         q_items = self_q_by_tab.get(mapped_tab) or []
         max_possible = round_half_up_2(sum(float(item.get("points") or 0) for item in q_items))
@@ -2979,60 +3127,129 @@ def render_kpis_module(
             )
             st.success("✅ تم حفظ التقييم الذاتي بنجاح.")
             st.rerun()
+    st_idx += 1
 
-    with sub_tabs[1]:
-        sen_id_str = str(current_user.get("senior_id") or "").strip()
-        sen_emp = emp_by_any_id.get(sen_id_str)
-        if not sen_emp:
-            st.info("لا يوجد سينيور محدد لحسابك حالياً.")
-        else:
-            st.markdown(f"#### تقييم السينيور: **{sen_emp.get('name_ar')}**")
-            sen_qs = peer_q_by_target.get("senior") or []
-            max_sen_pts = round_half_up_2(sum(float(item.get("points") or 0) for item in sen_qs))
-            sen_scores: Dict[str, float] = {}
-            for idx_s, item_s in enumerate(sen_qs):
-                q_s = str(item_s.get("question") or "")
-                pts_s = max(0.5, float(item_s.get("points") or 10.0))
-                sen_scores[q_s] = float(
-                    st.slider(
-                        f"{q_s} (الدرجة القصوى: {pts_s:g})",
-                        min_value=0.0,
-                        max_value=float(pts_s),
-                        value=float(min(pts_s, round_half_up_2(pts_s * 0.8))),
-                        step=0.5,
-                        key=f"kpi_rate_sen_{user_id}_{sen_emp['id']}_{idx_s}",
+    # 2) تقييم السينيور (يظهر فقط لمن له سينيور)
+    if has_my_senior:
+        with sub_tabs[st_idx]:
+            sen_emp = emp_by_any_id.get(str(current_user.get("senior_id") or "").strip())
+            if sen_emp:
+                st.markdown(f"#### تقييم السينيور: **{sen_emp.get('name_ar')}**")
+                sen_qs = peer_q_by_target.get("senior") or []
+                max_sen_pts = round_half_up_2(sum(float(item.get("points") or 0) for item in sen_qs))
+                sen_scores: Dict[str, float] = {}
+                for idx_s, item_s in enumerate(sen_qs):
+                    q_s = str(item_s.get("question") or "")
+                    pts_s = max(0.5, float(item_s.get("points") or 10.0))
+                    sen_scores[q_s] = float(
+                        st.slider(
+                            f"{q_s} (الدرجة القصوى: {pts_s:g})",
+                            min_value=0.0,
+                            max_value=float(pts_s),
+                            value=float(min(pts_s, round_half_up_2(pts_s * 0.8))),
+                            step=0.5,
+                            key=f"kpi_rate_sen_{user_id}_{sen_emp['id']}_{idx_s}",
+                        )
                     )
-                )
-            sen_tot = round_half_up_2(sum(sen_scores.values()))
-            sen_pct = round_half_up_2((sen_tot / max_sen_pts) * 100.0) if max_sen_pts > 0 else 0.0
-            sm1, sm2 = st.columns(2)
-            sm1.metric("مجموع الدرجات", f"{sen_tot:g} / {max_sen_pts:g}")
-            sm2.metric("النسبة المئوية", f"{sen_pct:g}%")
-            if st.button("💾 حفظ تقييم السينيور", type="primary", key="save_kpi_rate_sen_btn"):
-                upsert_record(
-                    "kpi_evaluations",
-                    {
-                        "employee_id": sen_emp["id"],
-                        "manager_id": user_id,
-                        "period_label": f"{period_lbl} | تقييم سينيور بواسطة {current_user.get('name_ar')}",
-                        "period_start": kpi_start_dt.isoformat(),
-                        "period_end": kpi_end_dt.isoformat(),
-                        "manager_scores": sen_scores,
-                        "manager_percentage": sen_pct,
-                        "status": "peer_senior_evaluated",
-                    },
-                    on_conflict="employee_id,period_label",
-                )
-                st.success("✅ تم حفظ تقييم السينيور بنجاح.")
-                st.rerun()
+                sen_tot = round_half_up_2(sum(sen_scores.values()))
+                sen_pct = round_half_up_2((sen_tot / max_sen_pts) * 100.0) if max_sen_pts > 0 else 0.0
+                sm1, sm2 = st.columns(2)
+                sm1.metric("مجموع الدرجات", f"{sen_tot:g} / {max_sen_pts:g}")
+                sm2.metric("النسبة المئوية", f"{sen_pct:g}%")
+                if st.button("💾 حفظ تقييم السينيور", type="primary", key="save_kpi_rate_sen_btn"):
+                    upsert_record(
+                        "kpi_evaluations",
+                        {
+                            "employee_id": sen_emp["id"],
+                            "manager_id": user_id,
+                            "period_label": f"{period_lbl} | تقييم سينيور بواسطة {current_user.get('name_ar')}",
+                            "period_start": kpi_start_dt.isoformat(),
+                            "period_end": kpi_end_dt.isoformat(),
+                            "manager_scores": sen_scores,
+                            "manager_percentage": sen_pct,
+                            "status": "peer_senior_evaluated",
+                        },
+                        on_conflict="employee_id,period_label",
+                    )
+                    st.success("✅ تم حفظ تقييم السينيور بنجاح.")
+                    st.rerun()
+        st_idx += 1
 
-    with sub_tabs[2]:
-        mgr_id_str = str(current_user.get("direct_manager_id") or "").strip()
-        mgr_emp = emp_by_any_id.get(mgr_id_str)
-        if not mgr_emp:
-            st.info("لا يوجد مدير مباشر محدد لحسابك حالياً.")
-        else:
-            st.markdown(f"#### تقييم المدير المباشر: **{mgr_emp.get('name_ar')}**")
+    # 3) تقييم الموظفين (للمدير المباشر: فلتر بالموظفين التابعين + اختيار فئة الموظف ووضع درجاته)
+    if user_role == "manager":
+        with sub_tabs[st_idx]:
+            st.markdown("#### تقييم الموظفين التابعين")
+            subs_list = _get_subordinate_employees(current_user, employees)
+            if not subs_list:
+                st.info("لا يوجد موظفون تابعون لك لتقييمهم حالياً.")
+            else:
+                sub_map = {f"{e.get('name_ar')} (#{e.get('employee_no')})": e for e in subs_list}
+                sel_sub_lbl = st.selectbox("اختر الموظف", list(sub_map.keys()), key="mgr_rate_sub_emp_sel")
+                picked_sub_emp = sub_map[sel_sub_lbl]
+
+                default_sub_cat = _map_job_title_to_self_tab(picked_sub_emp)
+                sel_sub_cat = st.selectbox(
+                    "فئة الأسئلة حسب درجة الموظف",
+                    KPI_SELF_TABS,
+                    index=KPI_SELF_TABS.index(default_sub_cat) if default_sub_cat in KPI_SELF_TABS else 0,
+                    key=f"mgr_rate_sub_cat_{picked_sub_emp['id']}",
+                )
+
+                sub_q_items = self_q_by_tab.get(sel_sub_cat) or []
+                max_sub_pts = round_half_up_2(sum(float(item.get("points") or 0) for item in sub_q_items))
+                sub_scores_map: Dict[str, float] = {}
+
+                for idx_sq, item_sq in enumerate(sub_q_items):
+                    q_sq = str(item_sq.get("question") or "")
+                    pts_sq = max(0.5, float(item_sq.get("points") or 10.0))
+                    sub_scores_map[q_sq] = float(
+                        st.slider(
+                            f"{q_sq} (الدرجة القصوى: {pts_sq:g})",
+                            min_value=0.0,
+                            max_value=float(pts_sq),
+                            value=float(min(pts_sq, round_half_up_2(pts_sq * 0.8))),
+                            step=0.5,
+                            key=f"mgr_rate_sub_sl_{picked_sub_emp['id']}_{sel_sub_cat}_{idx_sq}",
+                        )
+                    )
+
+                sub_tot = round_half_up_2(sum(sub_scores_map.values()))
+                sub_pct = round_half_up_2((sub_tot / max_sub_pts) * 100.0) if max_sub_pts > 0 else 0.0
+                tm1, tm2 = st.columns(2)
+                tm1.metric("مجموع الدرجات", f"{sub_tot:g} / {max_sub_pts:g}")
+                tm2.metric("النسبة المئوية", f"{sub_pct:g}%")
+
+                if st.button("💾 حفظ تقييم الموظف", type="primary", key=f"save_mgr_rate_sub_{picked_sub_emp['id']}"):
+                    upsert_record(
+                        "kpi_evaluations",
+                        {
+                            "employee_id": picked_sub_emp["id"],
+                            "manager_id": user_id,
+                            "period_label": f"{period_lbl} | مدير مباشر ({sel_sub_cat})",
+                            "period_start": kpi_start_dt.isoformat(),
+                            "period_end": kpi_end_dt.isoformat(),
+                            "manager_scores": sub_scores_map,
+                            "manager_percentage": sub_pct,
+                            "status": "peer_manager_evaluated",
+                        },
+                        on_conflict="employee_id,period_label",
+                    )
+                    write_audit_log(
+                        "kpi_evaluations",
+                        "save_kpi_mgr_sub",
+                        "تقييم",
+                        f"تقييم المدير المباشر للموظف {picked_sub_emp.get('name_ar')} ({sub_tot:g}/{max_sub_pts:g})",
+                        by_name=current_user.get("name_ar", ""),
+                        by_user_id=user_id,
+                    )
+                    st.success(f"✅ تم حفظ تقييم الموظف {picked_sub_emp.get('name_ar')} بنجاح.")
+                    st.rerun()
+        st_idx += 1
+
+    # 4) تقييم المدير المباشر (يظهر فقط إذا كان للموظف مدير مباشر وليس هو المدير العام)
+    if not mgr_is_gm and my_mgr_emp:
+        with sub_tabs[st_idx]:
+            st.markdown(f"#### تقييم المدير المباشر: **{my_mgr_emp.get('name_ar')}**")
             mgr_qs = peer_q_by_target.get("manager") or []
             max_mgr_pts = round_half_up_2(sum(float(item.get("points") or 0) for item in mgr_qs))
             mgr_scores_val: Dict[str, float] = {}
@@ -3046,7 +3263,7 @@ def render_kpis_module(
                         max_value=float(pts_m),
                         value=float(min(pts_m, round_half_up_2(pts_m * 0.8))),
                         step=0.5,
-                        key=f"kpi_rate_mgr_{user_id}_{mgr_emp['id']}_{idx_m}",
+                        key=f"kpi_rate_mgr_{user_id}_{my_mgr_emp['id']}_{idx_m}",
                     )
                 )
             mgr_tot = round_half_up_2(sum(mgr_scores_val.values()))
@@ -3058,7 +3275,7 @@ def render_kpis_module(
                 upsert_record(
                     "kpi_evaluations",
                     {
-                        "employee_id": mgr_emp["id"],
+                        "employee_id": my_mgr_emp["id"],
                         "manager_id": user_id,
                         "period_label": f"{period_lbl} | تقييم مدير مباشر بواسطة {current_user.get('name_ar')}",
                         "period_start": kpi_start_dt.isoformat(),
@@ -3071,51 +3288,54 @@ def render_kpis_module(
                 )
                 st.success("✅ تم حفظ تقييم المدير المباشر بنجاح.")
                 st.rerun()
+        st_idx += 1
 
-    with sub_tabs[3]:
-        gm_emp = next((e for e in employees if str(e.get("role") or "").lower() == "general_manager"), None)
-        gm_target_id = gm_emp["id"] if gm_emp else None
-        gm_name = gm_emp.get("name_ar") if gm_emp else "المدير العام"
+    # 5) تقييم المدير العام (يظهر للمدير المباشر أو لمن مديره المباشر هو المدير العام)
+    if mgr_is_gm or user_role == "manager":
+        with sub_tabs[st_idx]:
+            gm_emp = next((e for e in employees if str(e.get("role") or "").lower() == "general_manager"), None)
+            gm_target_id = gm_emp["id"] if gm_emp else None
+            gm_name = gm_emp.get("name_ar") if gm_emp else "المدير العام"
 
-        st.markdown(f"#### تقييم المدير العام: **{gm_name}**")
-        gm_qs = peer_q_by_target.get("gm") or []
-        max_gm_pts = round_half_up_2(sum(float(item.get("points") or 0) for item in gm_qs))
-        gm_scores_val: Dict[str, float] = {}
-        for idx_g, item_g in enumerate(gm_qs):
-            q_g = str(item_g.get("question") or "")
-            pts_g = max(0.5, float(item_g.get("points") or 10.0))
-            gm_scores_val[q_g] = float(
-                st.slider(
-                    f"{q_g} (الدرجة القصوى: {pts_g:g})",
-                    min_value=0.0,
-                    max_value=float(pts_g),
-                    value=float(min(pts_g, round_half_up_2(pts_g * 0.8))),
-                    step=0.5,
-                    key=f"kpi_rate_gm_{user_id}_{idx_g}",
+            st.markdown(f"#### تقييم المدير العام: **{gm_name}**")
+            gm_qs = peer_q_by_target.get("gm") or []
+            max_gm_pts = round_half_up_2(sum(float(item.get("points") or 0) for item in gm_qs))
+            gm_scores_val: Dict[str, float] = {}
+            for idx_g, item_g in enumerate(gm_qs):
+                q_g = str(item_g.get("question") or "")
+                pts_g = max(0.5, float(item_g.get("points") or 10.0))
+                gm_scores_val[q_g] = float(
+                    st.slider(
+                        f"{q_g} (الدرجة القصوى: {pts_g:g})",
+                        min_value=0.0,
+                        max_value=float(pts_g),
+                        value=float(min(pts_g, round_half_up_2(pts_g * 0.8))),
+                        step=0.5,
+                        key=f"kpi_rate_gm_{user_id}_{idx_g}",
+                    )
                 )
-            )
-        gm_tot = round_half_up_2(sum(gm_scores_val.values()))
-        gm_pct = round_half_up_2((gm_tot / max_gm_pts) * 100.0) if max_gm_pts > 0 else 0.0
-        gm1, gm2 = st.columns(2)
-        gm1.metric("مجموع الدرجات", f"{gm_tot:g} / {max_gm_pts:g}")
-        gm2.metric("النسبة المئوية", f"{gm_pct:g}%")
-        if st.button("💾 حفظ تقييم المدير العام", type="primary", key="save_kpi_rate_gm_btn") and gm_target_id:
-            upsert_record(
-                "kpi_evaluations",
-                {
-                    "employee_id": gm_target_id,
-                    "manager_id": user_id,
-                    "period_label": f"{period_lbl} | تقييم مدير عام بواسطة {current_user.get('name_ar')}",
-                    "period_start": kpi_start_dt.isoformat(),
-                    "period_end": kpi_end_dt.isoformat(),
-                    "manager_scores": gm_scores_val,
-                    "manager_percentage": gm_pct,
-                    "status": "peer_gm_evaluated",
-                },
-                on_conflict="employee_id,period_label",
-            )
-            st.success("✅ تم حفظ تقييم المدير العام بنجاح.")
-            st.rerun()
+            gm_tot = round_half_up_2(sum(gm_scores_val.values()))
+            gm_pct = round_half_up_2((gm_tot / max_gm_pts) * 100.0) if max_gm_pts > 0 else 0.0
+            gm1, gm2 = st.columns(2)
+            gm1.metric("مجموع الدرجات", f"{gm_tot:g} / {max_gm_pts:g}")
+            gm2.metric("النسبة المئوية", f"{gm_pct:g}%")
+            if st.button("💾 حفظ تقييم المدير العام", type="primary", key="save_kpi_rate_gm_btn") and gm_target_id:
+                upsert_record(
+                    "kpi_evaluations",
+                    {
+                        "employee_id": gm_target_id,
+                        "manager_id": user_id,
+                        "period_label": f"{period_lbl} | تقييم مدير عام بواسطة {current_user.get('name_ar')}",
+                        "period_start": kpi_start_dt.isoformat(),
+                        "period_end": kpi_end_dt.isoformat(),
+                        "manager_scores": gm_scores_val,
+                        "manager_percentage": gm_pct,
+                        "status": "peer_gm_evaluated",
+                    },
+                    on_conflict="employee_id,period_label",
+                )
+                st.success("✅ تم حفظ تقييم المدير العام بنجاح.")
+                st.rerun()
 
 
 # =====================================================================
