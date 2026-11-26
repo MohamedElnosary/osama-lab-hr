@@ -281,6 +281,28 @@ def _expand_holiday_days(hol: Dict[str, Any]) -> List[date]:
     return days
 
 
+def extract_active_fixed_allowances(employee: Dict[str, Any]) -> Dict[str, float]:
+    """
+    استخراج المكافآت الثابتة المفعّلة للموظف التي قيمتها أكبر من صفر فقط.
+    أي بند قيمته <= 0 يتم تجاهله تلقائياً.
+    """
+    raw_fa = employee.get("fixed_allowances")
+    if not isinstance(raw_fa, dict):
+        return {}
+    active_fa: Dict[str, float] = {}
+    for k, v in raw_fa.items():
+        name_clean = str(k or "").strip()
+        if not name_clean:
+            continue
+        try:
+            amt = _round2(float(v or 0))
+        except (ValueError, TypeError):
+            amt = 0.0
+        if amt > 0:
+            active_fa[name_clean] = amt
+    return active_fa
+
+
 def compute_employee_monthly_payroll(
     employee: Dict[str, Any],
     payroll_month: str,
@@ -294,7 +316,7 @@ def compute_employee_monthly_payroll(
 ) -> Dict[str, Any]:
     """
     حساب المرتب الشهري الفعلي للموظف (لكل الموظفين بلا استثناء):
-    - المرتب الأساسي + إجازات رسمية (+يوم لكل إجازة مفعّلة ومضافة للمرتب) + المكافآت المعتمدة + الوقت الإضافي المعتمد
+    - المرتب الأساسي + إجازات رسمية (+يوم لكل إجازة مفعّلة ومضافة للمرتب) + المكافآت المعتمدة + المكافآت الثابتة (> 0) + إضافي الحضور والانصراف
     - ناقص: خصم السلف المستحقة للشهر + الجزاءات المعتمدة + خصم التأخير والانصراف المبكر (بعد خصم السماح).
     """
     ym = str(payroll_month or "").strip()[:7]
@@ -337,8 +359,11 @@ def compute_employee_monthly_payroll(
 
     holiday_bonus = _round2(daily_rate * active_holidays_in_month)
 
-    # 2. المكافآت والجزاءات المعتمدة للشهر
-    rewards_total = 0.0
+    # 2. المكافآت الثابتة (> 0) + المكافآت والجزاءات المعتمدة للشهر
+    active_fixed_map = extract_active_fixed_allowances(employee)
+    fixed_allowances_total = _round2(sum(active_fixed_map.values()))
+
+    variable_rewards_total = 0.0
     penalties_deduction = 0.0
     for pr in penalties_rewards:
         if str(pr.get("employee_id") or "") not in emp_ids:
@@ -351,11 +376,13 @@ def compute_employee_monthly_payroll(
         amt = _round2(float(pr.get("calculated_amount") or 0))
         etype = (pr.get("entry_type") or "").strip().lower()
         if etype == "reward":
-            rewards_total = _round2(rewards_total + amt)
+            variable_rewards_total = _round2(variable_rewards_total + amt)
         elif etype == "penalty":
             penalties_deduction = _round2(penalties_deduction + amt)
 
-    # 3. الوقت الإضافي المعتمد وخصم التأخير والانصراف المبكر من سجلات البصمة
+    rewards_total = _round2(variable_rewards_total + fixed_allowances_total)
+
+    # 3. إضافي الحضور والانصراف وخصم التأخير والانصراف المبكر من سجلات البصمة
     approved_ot_minutes = 0
     deductible_late_and_early_minutes = 0
     late_grace = max(0, int(grace_late_minutes or 0))
@@ -423,6 +450,9 @@ def compute_employee_monthly_payroll(
         "base_salary": base_salary,
         "holiday_days_count": active_holidays_in_month,
         "holiday_bonus": holiday_bonus,
+        "fixed_allowances": active_fixed_map,
+        "fixed_allowances_total": fixed_allowances_total,
+        "variable_rewards_total": variable_rewards_total,
         "rewards_total": rewards_total,
         "approved_overtime_minutes": approved_ot_minutes,
         "overtime_pay": overtime_pay,
