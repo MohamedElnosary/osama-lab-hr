@@ -78,52 +78,57 @@ DEFAULT_PEER_QUESTIONS_BY_TARGET: Dict[str, List[Dict[str, Any]]] = {
     ],
 }
 
-# خريطة تشكيل الحروف العربية (منفصل، ابتدائي، وسطي، نهائي) للرسم المباشر داخل PDF
 _AR_FORMS: Dict[str, Tuple[str, str, str, str]] = {
-    "\u0627": ("\ufe8d", "\ufe8d", "\ufe8e", "\ufe8e"),
-    "\u0628": ("\ufe8f", "\ufe91", "\ufe92", "\ufe90"),
-    "\u062a": ("\ufe95", "\ufe97", "\ufe98", "\ufe96"),
-    "\u062b": ("\ufe99", "\ufe9b", "\ufe9c", "\ufe9a"),
-    "\u062c": ("\ufe9d", "\ufe9f", "\ufea0", "\ufe9e"),
-    "\u062d": ("\ufea1", "\ufea3", "\ufea4", "\ufea2"),
-    "\u062e": ("\ufea5", "\ufea7", "\ufea8", "\ufea6"),
-    "\u062f": ("\ufea9", "\ufea9", "\ufeaa", "\ufeaa"),
-    "\u0630": ("\ufeab", "\ufeab", "\ufeac", "\ufeac"),
-    "\u0631": ("\ufead", "\ufead", "\ufeae", "\ufeae"),
-    "\u0632": ("\ufeaf", "\ufeaf", "\ufeb0", "\ufeb0"),
-    "\u0633": ("\ufeb1", "\ufeb3", "\ufeb4", "\ufeb2"),
-    "\u0634": ("\ufeb5", "\ufeb7", "\ufeb8", "\ufeb6"),
-    "\u0635": ("\ufeb9", "\ufebb", "\ufebc", "\ufeba"),
-    "\u0636": ("\ufebd", "\ufebf", "\ufec0", "\ufebe"),
-    "\u0637": ("\ufec1", "\ufec3", "\ufec4", "\ufec2"),
-    "\u0638": ("\ufec5", "\ufec7", "\ufec8", "\ufec6"),
-    "\u0639": ("\ufec9", "\ufecb", "\ufecc", "\ufeca"),
-    "\u063a": ("\ufecd", "\ufecf", "\ufed0", "\ufece"),
-    "\u0641": ("\ufed1", "\ufed3", "\ufed4", "\ufed2"),
-    "\u0642": ("\ufed5", "\ufed7", "\ufed8", "\ufed6"),
-    "\u0643": ("\ufed9", "\ufedb", "\ufedc", "\ufeda"),
-    "\u0644": ("\ufedd", "\ufedf", "\ufee0", "\ufede"),
-    "\u0645": ("\ufee1", "\ufee3", "\ufee4", "\ufee2"),
-    "\u0646": ("\ufee5", "\ufee7", "\ufee8", "\ufee6"),
-    "\u0647": ("\ufee9", "\ufeeb", "\ufeec", "\ufeea"),
-    "\u0648": ("\ufeed", "\ufeed", "\ufeee", "\ufeee"),
-    "\u0649": ("\ufeef", "\ufeef", "\ufef0", "\ufef0"),
-    "\u064a": ("\ufef1", "\ufef3", "\ufef4", "\ufef2"),
-    "\u0621": ("\ufe80", "\ufe80", "\ufe80", "\ufe80"),
-    "\u0622": ("\ufe81", "\ufe81", "\ufe82", "\ufe82"),
-    "\u0623": ("\ufe83", "\ufe83", "\ufe84", "\ufe84"),
-    "\u0624": ("\ufe85", "\ufe85", "\ufe86", "\ufe86"),
-    "\u0625": ("\ufe87", "\ufe87", "\ufe88", "\ufe88"),
-    "\u0626": ("\ufe89", "\ufe8b", "\ufe8c", "\ufe8a"),
-    "\u0629": ("\ufe93", "\ufe93", "\ufe94", "\ufe94"),
+    chr(0x0627): (chr(0xFE8D), chr(0xFE8D), chr(0xFE8E), chr(0xFE8E)),
+    chr(0x0628): (chr(0xFE8F), chr(0xFE91), chr(0xFE92), chr(0xFE90)),
+    chr(0x062A): (chr(0xFE95), chr(0xFE97), chr(0xFE98), chr(0xFE96)),
+    chr(0x062B): (chr(0xFE99), chr(0xFE9B), chr(0xFE9C), chr(0xFE9A)),
+    chr(0x062C): (chr(0xFE9D), chr(0xFE9F), chr(0xFEA0), chr(0xFE9E)),
+    chr(0x062D): (chr(0xFEA1), chr(0xFEA3), chr(0xFEA4), chr(0xFEA2)),
+    chr(0x062E): (chr(0xFEA5), chr(0xFEA7), chr(0xFEA8), chr(0xFEA6)),
+    chr(0x062F): (chr(0xFEA9), chr(0xFEA9), chr(0xFEAA), chr(0xFEAA)),
+    chr(0x0630): (chr(0xFEAB), chr(0xFEAB), chr(0xFEAC), chr(0xFEAC)),
+    chr(0x0631): (chr(0xFEAD), chr(0xFEAD), chr(0xFEAE), chr(0xFEAE)),
+    chr(0x0632): (chr(0xFEAF), chr(0xFEAF), chr(0xFEB0), chr(0xFEB0)),
+    chr(0x0633): (chr(0xFEB1), chr(0xFEB3), chr(0xFEB4), chr(0xFEB2)),
+    chr(0x0634): (chr(0xFEB5), chr(0xFEB7), chr(0xFEB8), chr(0xFEB6)),
+    chr(0x0635): (chr(0xFEB9), chr(0xFEBB), chr(0xFEBC), chr(0xFEBA)),
+    chr(0x0636): (chr(0xFEBD), chr(0xFEBF), chr(0xFEC0), chr(0xFEBE)),
+    chr(0x0637): (chr(0xFEC1), chr(0xFEC3), chr(0xFEC4), chr(0xFEC2)),
+    chr(0x0638): (chr(0xFEC5), chr(0xFEC7), chr(0xFEC8), chr(0xFEC6)),
+    chr(0x0639): (chr(0xFEC9), chr(0xFECB), chr(0xFECC), chr(0xFECA)),
+    chr(0x063A): (chr(0xFECD), chr(0xFECF), chr(0xFED0), chr(0xFECE)),
+    chr(0x0641): (chr(0xFED1), chr(0xFED3), chr(0xFED4), chr(0xFED2)),
+    chr(0x0642): (chr(0xFED5), chr(0xFED7), chr(0xFED8), chr(0xFED6)),
+    chr(0x0643): (chr(0xFED9), chr(0xFEDB), chr(0xFEDC), chr(0xFEDA)),
+    chr(0x0644): (chr(0xFEDD), chr(0xFEDF), chr(0xFEE0), chr(0xFEDE)),
+    chr(0x0645): (chr(0xFEE1), chr(0xFEE3), chr(0xFEE4), chr(0xFEE2)),
+    chr(0x0646): (chr(0xFEE5), chr(0xFEE7), chr(0xFEE8), chr(0xFEE6)),
+    chr(0x0647): (chr(0xFEE9), chr(0xFEEB), chr(0xFEEC), chr(0xFEEA)),
+    chr(0x0648): (chr(0xFEED), chr(0xFEED), chr(0xFEEE), chr(0xFEEE)),
+    chr(0x0649): (chr(0xFEEF), chr(0xFEEF), chr(0xFEF0), chr(0xFEF0)),
+    chr(0x064A): (chr(0xFEF1), chr(0xFEF3), chr(0xFEF4), chr(0xFEF2)),
+    chr(0x0621): (chr(0xFE80), chr(0xFE80), chr(0xFE80), chr(0xFE80)),
+    chr(0x0622): (chr(0xFE81), chr(0xFE81), chr(0xFE82), chr(0xFE82)),
+    chr(0x0623): (chr(0xFE83), chr(0xFE83), chr(0xFE84), chr(0xFE84)),
+    chr(0x0624): (chr(0xFE85), chr(0xFE85), chr(0xFE86), chr(0xFE86)),
+    chr(0x0625): (chr(0xFE87), chr(0xFE87), chr(0xFE88), chr(0xFE88)),
+    chr(0x0626): (chr(0xFE89), chr(0xFE8B), chr(0xFE8C), chr(0xFE8A)),
+    chr(0x0629): (chr(0xFE93), chr(0xFE93), chr(0xFE94), chr(0xFE94)),
 }
-_NO_NEXT_JOIN: Set[str] = {"\u0627", "\u0622", "\u0623", "\u0625", "\u0621", "\u0624", "\u0629", "\u062f", "\u0630", "\u0631", "\u0632", "\u0648", "\ufeef"}
-_NO_PREV_JOIN: Set[str] = {"\u0621"}
-_DIACRITICS: Set[str] = {"\u064b", "\u064c", "\u064d", "\u064e", "\u064f", "\u0650", "\u0651", "\u0652", "\u0670"}
+_NO_NEXT_JOIN: Set[str] = {
+    chr(0x0627), chr(0x0622), chr(0x0623), chr(0x0625), chr(0x0621),
+    chr(0x0624), chr(0x0629), chr(0x062F), chr(0x0630), chr(0x0631),
+    chr(0x0632), chr(0x0648), chr(0xFEEF),
+}
+_NO_PREV_JOIN: Set[str] = {chr(0x0621)}
+_DIACRITICS: Set[str] = {
+    chr(0x064B), chr(0x064C), chr(0x064D), chr(0x064E),
+    chr(0x064F), chr(0x0650), chr(0x0651), chr(0x0652), chr(0x0670),
+}
 
 
 def _shape_arabic_rtl(text: str) -> str:
-    """تشكيل الحروف العربية وعكس النص للعرض السليم من اليمين لليسار."""
     s = "".join(ch for ch in str(text or "") if ch not in _DIACRITICS)
     n = len(s)
     if n == 0:
@@ -149,18 +154,18 @@ def _shape_arabic_rtl(text: str) -> str:
     return "".join(reversed(shaped))
 
 
-def _encode_pdf_text_literal(text: str) -> bytes:
-    """تحويل النص (عربي أو إنجليزي) إلى سلسلة PDF محرفية صالحة."""
+def _encode_pdf_text_literal(text: str) -> str:
     txt = str(text or "")
-    has_ar = any(ch in _AR_FORMS or ("\u0600" <= ch <= "\u06ff") for ch in txt)
+    has_ar = any((ch in _AR_FORMS) or (chr(0x0600) <= ch <= chr(0x06FF)) for ch in txt)
     out_str = _shape_arabic_rtl(txt) if has_ar else txt
     raw_bytes = out_str.encode("utf-16-be", errors="ignore") if has_ar else out_str.encode("latin-1", errors="replace")
-    escaped = bytearray()
+    escaped: List[str] = []
     for b in raw_bytes:
-        if b in (0x28, 0x29, 0x5C):  # (, ), \
-            escaped.append(0x5C)
-        escaped.append(b)
-    return b"(" + bytes(escaped) + b")"
+        if b in (0x28, 0x29, 0x5C):
+            escaped.append(chr(0x5C) + chr(b))
+        else:
+            escaped.append(chr(b))
+    return "(" + "".join(escaped) + ")"
 
 
 def build_arabic_table_pdf_bytes(
@@ -170,11 +175,7 @@ def build_arabic_table_pdf_bytes(
     rows: List[List[str]],
     summary_rows: Optional[List[Tuple[str, str]]] = None,
 ) -> bytes:
-    """
-    إنشاء ملف PDF حقيقي يحتوي على جداول مرتبة وواضحة باللغة العربية دون علامات استفهام.
-    يستخدم TrueType font مدمج أو Type1/Unicode لضمان الوضوح في قارئات PDF.
-    """
-    # نبني صفحة PDF قياسية A4 (595 x 842 نقطة) بجدول منظم بخطوط وحدود واضحة
+    """إنشاء ملف PDF جدولي مرتب وواضح لعرض نتائج التقييم وملخص الفترة."""
     page_w = 595.0
     page_h = 842.0
     margin_x = 32.0
@@ -182,7 +183,14 @@ def build_arabic_table_pdf_bytes(
 
     cmds: List[str] = []
 
-    def _draw_rect(x: float, y: float, w: float, h: float, fill_rgb: Optional[Tuple[float, float, float]] = None, stroke_rgb: Tuple[float, float, float] = (0.2, 0.28, 0.36)) -> None:
+    def _draw_rect(
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        fill_rgb: Optional[Tuple[float, float, float]] = None,
+        stroke_rgb: Tuple[float, float, float] = (0.2, 0.28, 0.36),
+    ) -> None:
         if fill_rgb is not None:
             cmds.append(f"{fill_rgb[0]:.3f} {fill_rgb[1]:.3f} {fill_rgb[2]:.3f} rg")
         cmds.append(f"{stroke_rgb[0]:.3f} {stroke_rgb[1]:.3f} {stroke_rgb[2]:.3f} RG")
@@ -190,29 +198,34 @@ def build_arabic_table_pdf_bytes(
         mode = "B" if fill_rgb is not None else "S"
         cmds.append(f"{x:.2f} {y:.2f} {w:.2f} {h:.2f} re {mode}")
 
-    def _draw_text(x: float, y: float, text: str, font_sz: float = 10.5, rgb: Tuple[float, float, float] = (0.06, 0.09, 0.16), bold: bool = False) -> None:
+    def _draw_text(
+        x: float,
+        y: float,
+        text: str,
+        font_sz: float = 10.5,
+        rgb: Tuple[float, float, float] = (0.06, 0.09, 0.16),
+        bold: bool = False,
+    ) -> None:
         font_name = "/F2" if bold else "/F1"
+        lit = _encode_pdf_text_literal(text)
         cmds.append("BT")
         cmds.append(f"{font_name} {font_sz:.1f} Tf")
         cmds.append(f"{rgb[0]:.3f} {rgb[1]:.3f} {rgb[2]:.3f} rg")
         cmds.append(f"{x:.2f} {y:.2f} Td")
-        cmds.append(_encode_pdf_text_literal(text).decode("latin-1") + " Tj")
+        cmds.append(f"{lit} Tj")
         cmds.append("ET")
 
-    # شريط العنوان الرئيسي
     _draw_rect(margin_x, page_h - 72, usable_w, 42, fill_rgb=(0.06, 0.30, 0.36), stroke_rgb=(0.06, 0.30, 0.36))
     _draw_text(margin_x + 14, page_h - 56, report_title, font_sz=13.0, rgb=(1.0, 1.0, 1.0), bold=True)
     _draw_text(margin_x + 14, page_h - 69, subtitle_text, font_sz=9.5, rgb=(0.88, 0.95, 0.98), bold=False)
 
     cur_y = page_h - 96
 
-    # جدول التقييم الرئيسي
     if headers and rows:
         num_cols = len(headers)
         col_w = usable_w / num_cols
         row_h = 24.0
 
-        # صف العناوين
         _draw_rect(margin_x, cur_y - row_h, usable_w, row_h, fill_rgb=(0.94, 0.96, 0.98))
         for c_i, h_lbl in enumerate(headers):
             cx = margin_x + c_i * col_w
@@ -233,7 +246,6 @@ def build_arabic_table_pdf_bytes(
                 _draw_text(cx + 8, cur_y - row_h + 7.5, val_s, font_sz=10.0, bold=is_total_row)
             cur_y -= row_h
 
-    # جدول الملخص التفصيلي أسفل الجدول الرئيسي
     if summary_rows:
         cur_y -= 18
         if cur_y - 24 >= 50:
@@ -680,13 +692,15 @@ def _render_printable_and_pdf_actions(
         return
     cols_keys = list(table_rows[0].keys())
     hdr_html = "".join(f"<th>{c_k}</th>" for c_k in cols_keys)
-    bdy_html = ""
+    bdy_parts: List[str] = []
     for idx_r, r_item in enumerate(table_rows):
         is_tot = str(r_item.get("البند") or "") == "الإجمالي" and idx_r == len(table_rows) - 1
         tr_cls = " class='tot-row'" if is_tot else ""
-        bdy_html += f"<tr{tr_cls}>" + "".join(f"<td>{r_item[c_k]}</td>" for c_k in cols_keys) + "</tr>"
+        cells_html = "".join(f"<td>{r_item[c_k]}</td>" for c_k in cols_keys)
+        bdy_parts.append(f"<tr{tr_cls}>{cells_html}</tr>")
+    bdy_html = "".join(bdy_parts)
 
-    print_doc_json = json.dumps(
+    print_html_doc = (
         f"<!DOCTYPE html><html dir='rtl' lang='ar'><head><meta charset='utf-8'><title>{doc_title}</title>"
         "<style>"
         "body{font-family:'Cairo',Tahoma,sans-serif;direction:rtl;margin:28px;color:#0f172a;}"
@@ -700,6 +714,7 @@ def _render_printable_and_pdf_actions(
         f"<table><thead><tr>{hdr_html}</tr></thead><tbody>{bdy_html}</tbody></table>"
         "</body></html>"
     )
+    print_doc_json = json.dumps(print_html_doc)
 
     pdf_rows_list: List[List[str]] = [
         [str(r_item.get(c_k, "")) for c_k in cols_keys]
@@ -715,17 +730,15 @@ def _render_printable_and_pdf_actions(
 
     p_col_a, p_col_b = st.columns([1.5, 1.5])
     with p_col_a:
-        st.components.v1.html(
-            f"""
-            <div style="direction:rtl;text-align:right;">
-                <button onclick="var w=window.open('','_blank','width=950,height=700');w.document.write({print_doc_json});w.document.close();w.focus();setTimeout(function(){{w.print();}},300);"
-                        style="background:#0f4c5c;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-family:'Cairo',sans-serif;font-size:14px;font-weight:700;cursor:pointer;">
-                    🖨️ طباعة في ورقة مستقلة
-                </button>
-            </div>
-            """,
-            height=50,
+        btn_html = (
+            "<div style='direction:rtl;text-align:right;'>"
+            f"<button onclick=\"var w=window.open('','_blank','width=950,height=700');w.document.write({print_doc_json});w.document.close();w.focus();setTimeout(function(){{w.print();}},300);\" "
+            "style='background:#0f4c5c;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-family:Cairo,sans-serif;font-size:14px;font-weight:700;cursor:pointer;'>"
+            "🖨️ طباعة في ورقة مستقلة"
+            "</button>"
+            "</div>"
         )
+        st.components.v1.html(btn_html, height=50)
     with p_col_b:
         st.download_button(
             "📄 تصدير PDF",
@@ -915,7 +928,6 @@ def render_kpis_module(
     self_q_by_tab = get_all_self_questions(eff_org)
     peer_q_by_target = get_all_peer_questions(eff_org)
 
-    # --- حالة المدير العام: تقييم الموظفين + التقارير الأربعة ---
     if user_role == "general_manager":
         gm_tabs = st.tabs([
             "👥 تقييم الموظفين",
@@ -1216,7 +1228,6 @@ def render_kpis_module(
                 )
         return
 
-    # --- المستخدمون غير المدير العام ---
     has_my_senior = bool(str(current_user.get("senior_id") or "").strip())
     my_mgr_id_str = str(current_user.get("direct_manager_id") or "").strip()
     my_mgr_emp = emp_by_any_id.get(my_mgr_id_str)
