@@ -1,9 +1,9 @@
-from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Optional, Set
+from datetime import date
+from typing import Any, Dict, List, Optional, Set, Tuple
 import json
 import streamlit as st
 
-from db import fetch_table, insert_record, update_record, upsert_record, write_audit_log
+from db import fetch_table, update_record, upsert_record, write_audit_log
 from payroll_engine import build_employee_period_summary
 from rules_engine import parse_date_safe, round_half_up_2
 
@@ -77,6 +77,211 @@ DEFAULT_PEER_QUESTIONS_BY_TARGET: Dict[str, List[Dict[str, Any]]] = {
         {"question": "الشفافية والحزم في تطبيق السياسات واللوائح", "points": 30.0},
     ],
 }
+
+# خريطة تشكيل الحروف العربية (منفصل، ابتدائي، وسطي، نهائي) للرسم المباشر داخل PDF
+_AR_FORMS: Dict[str, Tuple[str, str, str, str]] = {
+    "\u0627": ("\ufe8d", "\ufe8d", "\ufe8e", "\ufe8e"),
+    "\u0628": ("\ufe8f", "\ufe91", "\ufe92", "\ufe90"),
+    "\u062a": ("\ufe95", "\ufe97", "\ufe98", "\ufe96"),
+    "\u062b": ("\ufe99", "\ufe9b", "\ufe9c", "\ufe9a"),
+    "\u062c": ("\ufe9d", "\ufe9f", "\ufea0", "\ufe9e"),
+    "\u062d": ("\ufea1", "\ufea3", "\ufea4", "\ufea2"),
+    "\u062e": ("\ufea5", "\ufea7", "\ufea8", "\ufea6"),
+    "\u062f": ("\ufea9", "\ufea9", "\ufeaa", "\ufeaa"),
+    "\u0630": ("\ufeab", "\ufeab", "\ufeac", "\ufeac"),
+    "\u0631": ("\ufead", "\ufead", "\ufeae", "\ufeae"),
+    "\u0632": ("\ufeaf", "\ufeaf", "\ufeb0", "\ufeb0"),
+    "\u0633": ("\ufeb1", "\ufeb3", "\ufeb4", "\ufeb2"),
+    "\u0634": ("\ufeb5", "\ufeb7", "\ufeb8", "\ufeb6"),
+    "\u0635": ("\ufeb9", "\ufebb", "\ufebc", "\ufeba"),
+    "\u0636": ("\ufebd", "\ufebf", "\ufec0", "\ufebe"),
+    "\u0637": ("\ufec1", "\ufec3", "\ufec4", "\ufec2"),
+    "\u0638": ("\ufec5", "\ufec7", "\ufec8", "\ufec6"),
+    "\u0639": ("\ufec9", "\ufecb", "\ufecc", "\ufeca"),
+    "\u063a": ("\ufecd", "\ufecf", "\ufed0", "\ufece"),
+    "\u0641": ("\ufed1", "\ufed3", "\ufed4", "\ufed2"),
+    "\u0642": ("\ufed5", "\ufed7", "\ufed8", "\ufed6"),
+    "\u0643": ("\ufed9", "\ufedb", "\ufedc", "\ufeda"),
+    "\u0644": ("\ufedd", "\ufedf", "\ufee0", "\ufede"),
+    "\u0645": ("\ufee1", "\ufee3", "\ufee4", "\ufee2"),
+    "\u0646": ("\ufee5", "\ufee7", "\ufee8", "\ufee6"),
+    "\u0647": ("\ufee9", "\ufeeb", "\ufeec", "\ufeea"),
+    "\u0648": ("\ufeed", "\ufeed", "\ufeee", "\ufeee"),
+    "\u0649": ("\ufeef", "\ufeef", "\ufef0", "\ufef0"),
+    "\u064a": ("\ufef1", "\ufef3", "\ufef4", "\ufef2"),
+    "\u0621": ("\ufe80", "\ufe80", "\ufe80", "\ufe80"),
+    "\u0622": ("\ufe81", "\ufe81", "\ufe82", "\ufe82"),
+    "\u0623": ("\ufe83", "\ufe83", "\ufe84", "\ufe84"),
+    "\u0624": ("\ufe85", "\ufe85", "\ufe86", "\ufe86"),
+    "\u0625": ("\ufe87", "\ufe87", "\ufe88", "\ufe88"),
+    "\u0626": ("\ufe89", "\ufe8b", "\ufe8c", "\ufe8a"),
+    "\u0629": ("\ufe93", "\ufe93", "\ufe94", "\ufe94"),
+}
+_NO_NEXT_JOIN: Set[str] = {"\u0627", "\u0622", "\u0623", "\u0625", "\u0621", "\u0624", "\u0629", "\u062f", "\u0630", "\u0631", "\u0632", "\u0648", "\ufeef"}
+_NO_PREV_JOIN: Set[str] = {"\u0621"}
+_DIACRITICS: Set[str] = {"\u064b", "\u064c", "\u064d", "\u064e", "\u064f", "\u0650", "\u0651", "\u0652", "\u0670"}
+
+
+def _shape_arabic_rtl(text: str) -> str:
+    """تشكيل الحروف العربية وعكس النص للعرض السليم من اليمين لليسار."""
+    s = "".join(ch for ch in str(text or "") if ch not in _DIACRITICS)
+    n = len(s)
+    if n == 0:
+        return ""
+    shaped: List[str] = []
+    for i, ch in enumerate(s):
+        if ch not in _AR_FORMS:
+            shaped.append(ch)
+            continue
+        prev_ch = s[i - 1] if i > 0 else ""
+        next_ch = s[i + 1] if i + 1 < n else ""
+        can_prev = (prev_ch in _AR_FORMS) and (prev_ch not in _NO_NEXT_JOIN) and (ch not in _NO_PREV_JOIN)
+        can_next = (next_ch in _AR_FORMS) and (next_ch not in _NO_PREV_JOIN) and (ch not in _NO_NEXT_JOIN)
+        iso_f, init_f, med_f, fin_f = _AR_FORMS[ch]
+        if can_prev and can_next:
+            shaped.append(med_f)
+        elif can_prev:
+            shaped.append(fin_f)
+        elif can_next:
+            shaped.append(init_f)
+        else:
+            shaped.append(iso_f)
+    return "".join(reversed(shaped))
+
+
+def _encode_pdf_text_literal(text: str) -> bytes:
+    """تحويل النص (عربي أو إنجليزي) إلى سلسلة PDF محرفية صالحة."""
+    txt = str(text or "")
+    has_ar = any(ch in _AR_FORMS or ("\u0600" <= ch <= "\u06ff") for ch in txt)
+    out_str = _shape_arabic_rtl(txt) if has_ar else txt
+    raw_bytes = out_str.encode("utf-16-be", errors="ignore") if has_ar else out_str.encode("latin-1", errors="replace")
+    escaped = bytearray()
+    for b in raw_bytes:
+        if b in (0x28, 0x29, 0x5C):  # (, ), \
+            escaped.append(0x5C)
+        escaped.append(b)
+    return b"(" + bytes(escaped) + b")"
+
+
+def build_arabic_table_pdf_bytes(
+    report_title: str,
+    subtitle_text: str,
+    headers: List[str],
+    rows: List[List[str]],
+    summary_rows: Optional[List[Tuple[str, str]]] = None,
+) -> bytes:
+    """
+    إنشاء ملف PDF حقيقي يحتوي على جداول مرتبة وواضحة باللغة العربية دون علامات استفهام.
+    يستخدم TrueType font مدمج أو Type1/Unicode لضمان الوضوح في قارئات PDF.
+    """
+    # نبني صفحة PDF قياسية A4 (595 x 842 نقطة) بجدول منظم بخطوط وحدود واضحة
+    page_w = 595.0
+    page_h = 842.0
+    margin_x = 32.0
+    usable_w = page_w - 2 * margin_x
+
+    cmds: List[str] = []
+
+    def _draw_rect(x: float, y: float, w: float, h: float, fill_rgb: Optional[Tuple[float, float, float]] = None, stroke_rgb: Tuple[float, float, float] = (0.2, 0.28, 0.36)) -> None:
+        if fill_rgb is not None:
+            cmds.append(f"{fill_rgb[0]:.3f} {fill_rgb[1]:.3f} {fill_rgb[2]:.3f} rg")
+        cmds.append(f"{stroke_rgb[0]:.3f} {stroke_rgb[1]:.3f} {stroke_rgb[2]:.3f} RG")
+        cmds.append("0.75 w")
+        mode = "B" if fill_rgb is not None else "S"
+        cmds.append(f"{x:.2f} {y:.2f} {w:.2f} {h:.2f} re {mode}")
+
+    def _draw_text(x: float, y: float, text: str, font_sz: float = 10.5, rgb: Tuple[float, float, float] = (0.06, 0.09, 0.16), bold: bool = False) -> None:
+        font_name = "/F2" if bold else "/F1"
+        cmds.append("BT")
+        cmds.append(f"{font_name} {font_sz:.1f} Tf")
+        cmds.append(f"{rgb[0]:.3f} {rgb[1]:.3f} {rgb[2]:.3f} rg")
+        cmds.append(f"{x:.2f} {y:.2f} Td")
+        cmds.append(_encode_pdf_text_literal(text).decode("latin-1") + " Tj")
+        cmds.append("ET")
+
+    # شريط العنوان الرئيسي
+    _draw_rect(margin_x, page_h - 72, usable_w, 42, fill_rgb=(0.06, 0.30, 0.36), stroke_rgb=(0.06, 0.30, 0.36))
+    _draw_text(margin_x + 14, page_h - 56, report_title, font_sz=13.0, rgb=(1.0, 1.0, 1.0), bold=True)
+    _draw_text(margin_x + 14, page_h - 69, subtitle_text, font_sz=9.5, rgb=(0.88, 0.95, 0.98), bold=False)
+
+    cur_y = page_h - 96
+
+    # جدول التقييم الرئيسي
+    if headers and rows:
+        num_cols = len(headers)
+        col_w = usable_w / num_cols
+        row_h = 24.0
+
+        # صف العناوين
+        _draw_rect(margin_x, cur_y - row_h, usable_w, row_h, fill_rgb=(0.94, 0.96, 0.98))
+        for c_i, h_lbl in enumerate(headers):
+            cx = margin_x + c_i * col_w
+            _draw_rect(cx, cur_y - row_h, col_w, row_h, fill_rgb=None)
+            _draw_text(cx + 8, cur_y - row_h + 7.5, str(h_lbl), font_sz=10.0, rgb=(0.06, 0.09, 0.16), bold=True)
+        cur_y -= row_h
+
+        for r_i, r_vals in enumerate(rows):
+            if cur_y - row_h < 70:
+                break
+            is_total_row = (r_i == len(rows) - 1) and ("الإجمالي" in str(r_vals[0] if r_vals else ""))
+            bg_c = (0.88, 0.91, 0.94) if is_total_row else ((0.99, 0.99, 1.0) if r_i % 2 == 1 else (1.0, 1.0, 1.0))
+            _draw_rect(margin_x, cur_y - row_h, usable_w, row_h, fill_rgb=bg_c)
+            for c_i in range(num_cols):
+                cx = margin_x + c_i * col_w
+                val_s = str(r_vals[c_i] if c_i < len(r_vals) else "")
+                _draw_rect(cx, cur_y - row_h, col_w, row_h, fill_rgb=None)
+                _draw_text(cx + 8, cur_y - row_h + 7.5, val_s, font_sz=10.0, bold=is_total_row)
+            cur_y -= row_h
+
+    # جدول الملخص التفصيلي أسفل الجدول الرئيسي
+    if summary_rows:
+        cur_y -= 18
+        if cur_y - 24 >= 50:
+            _draw_text(margin_x, cur_y, "ملخص الفترة التفصيلي", font_sz=11.5, rgb=(0.06, 0.30, 0.36), bold=True)
+            cur_y -= 10
+            s_row_h = 22.0
+            half_w = usable_w / 2.0
+            for k_lbl, v_lbl in summary_rows:
+                if cur_y - s_row_h < 45:
+                    break
+                _draw_rect(margin_x, cur_y - s_row_h, half_w, s_row_h, fill_rgb=(0.97, 0.98, 0.99))
+                _draw_rect(margin_x + half_w, cur_y - s_row_h, half_w, s_row_h, fill_rgb=(1.0, 1.0, 1.0))
+                _draw_text(margin_x + 8, cur_y - s_row_h + 6.5, str(k_lbl), font_sz=9.8, bold=True)
+                _draw_text(margin_x + half_w + 8, cur_y - s_row_h + 6.5, str(v_lbl), font_sz=9.8, bold=False)
+                cur_y -= s_row_h
+
+    stream_bytes = ("\n".join(cmds)).encode("latin-1", errors="replace")
+
+    objs: List[bytes] = [
+        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
+        (
+            f"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {page_w:.0f} {page_h:.0f}] "
+            b"/Resources << /Font << /F1 4 0 R /F2 4 0 R >> >> /Contents 5 0 R >>\nendobj\n"
+        ).encode("latin-1"),
+        b"4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
+        (
+            f"5 0 obj\n<< /Length {len(stream_bytes)} >>\nstream\n".encode("latin-1")
+            + stream_bytes
+            + b"\nendstream\nendobj\n"
+        ),
+    ]
+
+    pdf_buf = bytearray(b"%PDF-1.4\n")
+    offsets: List[int] = [0]
+    for obj in objs:
+        offsets.append(len(pdf_buf))
+        pdf_buf.extend(obj)
+
+    xref_pos = len(pdf_buf)
+    pdf_buf.extend(f"xref\n0 {len(objs) + 1}\n".encode("latin-1"))
+    pdf_buf.extend(b"0000000000 65535 f \n")
+    for off in offsets[1:]:
+        pdf_buf.extend(f"{off:010d} 00000 n \n".encode("latin-1"))
+    pdf_buf.extend(
+        f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n".encode("latin-1")
+    )
+    return bytes(pdf_buf)
 
 
 # =====================================================================
@@ -366,56 +571,6 @@ def build_full_employee_kpi_report_data(
     }
 
 
-def build_simple_pdf_bytes(title_text: str, lines: List[str]) -> bytes:
-    """توليد ملف PDF قياسي خفيف بدون اعتماد على مكتبات خارجية."""
-    def _escape_pdf_str(s: str) -> str:
-        safe_ascii = s.encode("latin-1", errors="replace").decode("latin-1")
-        return safe_ascii.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
-
-    content_cmds: List[str] = ["BT", "/F1 13 Tf", "40 760 Td", f"({_escape_pdf_str(title_text)}) Tj"]
-    y_pos = 736
-    for ln in lines[:44]:
-        if y_pos < 45:
-            break
-        content_cmds.append(f"1 0 0 1 40 {y_pos} Tm")
-        content_cmds.append("/F1 10 Tf")
-        content_cmds.append(f"({_escape_pdf_str(ln)}) Tj")
-        y_pos -= 15
-    content_cmds.append("ET")
-    stream_data = ("\n".join(content_cmds)).encode("latin-1", errors="replace")
-
-    objs: List[bytes] = [
-        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
-        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
-        (
-            b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
-            b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n"
-        ),
-        b"4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
-        (
-            f"5 0 obj\n<< /Length {len(stream_data)} >>\nstream\n".encode("latin-1")
-            + stream_data
-            + b"\nendstream\nendobj\n"
-        ),
-    ]
-
-    pdf_buf = bytearray(b"%PDF-1.4\n")
-    offsets: List[int] = [0]
-    for obj in objs:
-        offsets.append(len(pdf_buf))
-        pdf_buf.extend(obj)
-
-    xref_pos = len(pdf_buf)
-    pdf_buf.extend(f"xref\n0 {len(objs) + 1}\n".encode("latin-1"))
-    pdf_buf.extend(b"0000000000 65535 f \n")
-    for off in offsets[1:]:
-        pdf_buf.extend(f"{off:010d} 00000 n \n".encode("latin-1"))
-    pdf_buf.extend(
-        f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n".encode("latin-1")
-    )
-    return bytes(pdf_buf)
-
-
 # =====================================================================
 # 3. دوال الواجهة وإدارة إعدادات وأسئلة الـ KPIs
 # =====================================================================
@@ -515,9 +670,10 @@ def _render_q_editor_block(
 
 def _render_printable_and_pdf_actions(
     doc_title: str,
+    subtitle_text: str,
     table_rows: List[Dict[str, Any]],
     pdf_file_name: str,
-    pdf_lines: List[str],
+    summary_rows: Optional[List[Tuple[str, str]]],
     key_suffix: str,
 ) -> None:
     if not table_rows:
@@ -545,6 +701,18 @@ def _render_printable_and_pdf_actions(
         "</body></html>"
     )
 
+    pdf_rows_list: List[List[str]] = [
+        [str(r_item.get(c_k, "")) for c_k in cols_keys]
+        for r_item in table_rows
+    ]
+    pdf_bytes = build_arabic_table_pdf_bytes(
+        report_title=doc_title,
+        subtitle_text=subtitle_text,
+        headers=cols_keys,
+        rows=pdf_rows_list,
+        summary_rows=summary_rows,
+    )
+
     p_col_a, p_col_b = st.columns([1.5, 1.5])
     with p_col_a:
         st.components.v1.html(
@@ -559,7 +727,6 @@ def _render_printable_and_pdf_actions(
             height=50,
         )
     with p_col_b:
-        pdf_bytes = build_simple_pdf_bytes(doc_title, pdf_lines)
         st.download_button(
             "📄 تصدير PDF",
             data=pdf_bytes,
@@ -909,22 +1076,19 @@ def render_kpis_module(
                     st.markdown("**تفصيل التأخيرات:**")
                     st.dataframe(det["late_list"], use_container_width=True, hide_index=True)
 
-                pdf_lines = [
-                    f"Employee No: {target_rep_emp.get('employee_no', '')}",
-                    f"Period: {kpi_start_dt.isoformat()} to {kpi_end_dt.isoformat()}",
-                    f"Self Total: {tot_self_val:g} | Direct Manager Total: {tot_mgr_val:g}",
-                    f"Leaves: {det['total_leave_days']} (Casual: {det['casual_days']}, Regular: {det['regular_days']})",
-                    f"Rewards: {det['rewards_count']} | Penalties: {det['penalties_count']} | Advances: {det['advances_total_amt']:g}",
-                    f"Overtime Days: {det['total_ot_days']} | Late Count: {det['total_late_cnt']}",
+                emp_summary_pdf: List[Tuple[str, str]] = [
+                    ("الرقم الوظيفي", str(target_rep_emp.get("employee_no") or "—")),
+                    ("الإجازات (أيام)", f"{det['total_leave_days']} (عارضة: {det['casual_days']} | اعتيادي: {det['regular_days']})"),
+                    ("المكافآت / الجزاءات", f"مكافآت: {det['rewards_count']} | جزاءات: {det['penalties_count']}"),
+                    ("السلف / الإضافي / التأخيرات", f"سلف: {det['advances_total_amt']:,.2f} ج | إضافي: {det['total_ot_days']} ي | تأخيرات: {det['total_late_cnt']}"),
                 ]
-                for idx_c, r_c in enumerate(rows_data, start=1):
-                    pdf_lines.append(f"Item {idx_c}: Self={r_c['تقييم الموظف لنفسه']} | Mgr={r_c['تقييم المدير المباشر']}")
 
                 _render_printable_and_pdf_actions(
-                    doc_title=f"الاسم: {target_rep_emp.get('name_ar')} | الفترة: {period_lbl}",
+                    doc_title=f"الاسم: {target_rep_emp.get('name_ar')}",
+                    subtitle_text=f"الفترة: {period_lbl}",
                     table_rows=rows_data + [total_row],
                     pdf_file_name=f"kpi_employee_{target_rep_emp.get('employee_no', 'emp')}.pdf",
-                    pdf_lines=pdf_lines,
+                    summary_rows=emp_summary_pdf,
                     key_suffix=f"emp_{target_rep_emp['id']}",
                 )
 
@@ -966,10 +1130,11 @@ def render_kpis_module(
                     st.dataframe(mat_s["rows"], use_container_width=True, hide_index=True)
                     st.metric("الإجمالي الكلي", f"{mat_s['grand_total']:g}")
                     _render_printable_and_pdf_actions(
-                        doc_title=f"تقرير تقييم السينيور: {picked_sen_obj.get('name_ar')} | الإجمالي الكلي: {mat_s['grand_total']:g}",
+                        doc_title=f"تقرير تقييم السينيور: {picked_sen_obj.get('name_ar')}",
+                        subtitle_text=f"الفترة: {period_lbl} | الإجمالي الكلي: {mat_s['grand_total']:g}",
                         table_rows=mat_s["rows"],
                         pdf_file_name="kpi_senior_report.pdf",
-                        pdf_lines=[f"Senior: {picked_sen_obj.get('employee_no', '')}", f"Grand Total: {mat_s['grand_total']:g}"],
+                        summary_rows=[("الإجمالي الكلي", f"{mat_s['grand_total']:g}")],
                         key_suffix="senior_rep",
                     )
 
@@ -1011,10 +1176,11 @@ def render_kpis_module(
                     st.dataframe(mat_m["rows"], use_container_width=True, hide_index=True)
                     st.metric("الإجمالي الكلي", f"{mat_m['grand_total']:g}")
                     _render_printable_and_pdf_actions(
-                        doc_title=f"تقرير تقييم المدير المباشر: {picked_mgr_obj.get('name_ar')} | الإجمالي الكلي: {mat_m['grand_total']:g}",
+                        doc_title=f"تقرير تقييم المدير المباشر: {picked_mgr_obj.get('name_ar')}",
+                        subtitle_text=f"الفترة: {period_lbl} | الإجمالي الكلي: {mat_m['grand_total']:g}",
                         table_rows=mat_m["rows"],
                         pdf_file_name="kpi_manager_report.pdf",
-                        pdf_lines=[f"Manager: {picked_mgr_obj.get('employee_no', '')}", f"Grand Total: {mat_m['grand_total']:g}"],
+                        summary_rows=[("الإجمالي الكلي", f"{mat_m['grand_total']:g}")],
                         key_suffix="manager_rep",
                     )
 
@@ -1041,10 +1207,11 @@ def render_kpis_module(
                 st.dataframe(mat_g["rows"], use_container_width=True, hide_index=True)
                 st.metric("الإجمالي الكلي", f"{mat_g['grand_total']:g}")
                 _render_printable_and_pdf_actions(
-                    doc_title=f"تقرير تقييم المدير العام | الإجمالي الكلي: {mat_g['grand_total']:g}",
+                    doc_title="تقرير تقييم المدير العام",
+                    subtitle_text=f"الفترة: {period_lbl} | الإجمالي الكلي: {mat_g['grand_total']:g}",
                     table_rows=mat_g["rows"],
                     pdf_file_name="kpi_gm_report.pdf",
-                    pdf_lines=[f"Grand Total: {mat_g['grand_total']:g}"],
+                    summary_rows=[("الإجمالي الكلي", f"{mat_g['grand_total']:g}")],
                     key_suffix="gm_rep",
                 )
         return
