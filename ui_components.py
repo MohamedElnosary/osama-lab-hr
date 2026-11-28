@@ -74,6 +74,8 @@ KPI_SELF_TABS: List[str] = [
     "مدير مباشر",
 ]
 
+KPI_CONFIG_TABS: List[str] = KPI_SELF_TABS + ["مدير عام"]
+
 DEFAULT_SELF_QUESTIONS_BY_TAB: Dict[str, List[Dict[str, Any]]] = {
     "استقبال": [
         {"question": "الالتزام بالمواعيد والحضور المنتظم", "points": 25.0},
@@ -329,7 +331,6 @@ def _build_full_employee_kpi_report_data(
     emp_ids = _emp_identifiers(emp)
     emp_id_primary = str(emp.get("id") or "")
 
-    # 1. الإجازات
     casual_days = 0.0
     regular_days = 0.0
     other_leave_days = 0.0
@@ -371,7 +372,6 @@ def _build_full_employee_kpi_report_data(
             "السبب": lr.get("reason") or "—",
         })
 
-    # 2. المكافآت والجزاءات
     rewards_list: List[Dict[str, Any]] = []
     penalties_list: List[Dict[str, Any]] = []
     rewards_by_month: Dict[str, int] = {}
@@ -405,7 +405,6 @@ def _build_full_employee_kpi_report_data(
                 "السبب": pr.get("reason") or pr.get("title") or "—",
             })
 
-    # 3. السلف
     advances_list: List[Dict[str, Any]] = []
     advances_by_month: Dict[str, float] = {}
     advances_total_amt = 0.0
@@ -430,7 +429,6 @@ def _build_full_employee_kpi_report_data(
             "السبب": adv.get("reason") or "—",
         })
 
-    # 4. الإضافي والتأخيرات
     ot_list: List[Dict[str, Any]] = []
     late_list: List[Dict[str, Any]] = []
     ot_days_by_month: Dict[str, set] = {}
@@ -3036,7 +3034,7 @@ def render_reports_module(
 
 
 # =====================================================================
-# 7. شاشة الـ KPIs (نظام واضح ومنضبط ومناسب لجميع المستويات الوظيفية)
+# 7. شاشة الـ KPIs
 # =====================================================================
 def render_kpis_module(
     current_user: Dict[str, Any],
@@ -3074,7 +3072,6 @@ def render_kpis_module(
     self_q_by_tab = _get_all_self_questions(eff_org)
     peer_q_by_target = _get_all_peer_questions(eff_org)
 
-    # --- المدير العام: تقييم الموظفين + التقارير الأربعة ---
     if user_role == "general_manager":
         gm_tabs = st.tabs([
             "👥 تقييم الموظفين",
@@ -3142,7 +3139,6 @@ def render_kpis_module(
                     st.success(f"✅ تم حفظ تقييم الموظف {picked_remp.get('name_ar')} بنجاح.")
                     st.rerun()
 
-        # تقرير الموظف: البنود + تقييم الموظف لنفسه + تقييم المدير المباشر + الإجمالي + تفاصيل الفترة + طباعة / PDF
         with gm_tabs[1]:
             st.markdown("#### تقرير الموظف")
             report_emps = [
@@ -3310,7 +3306,6 @@ def render_kpis_module(
                         key=f"dl_kpi_pdf_{target_rep_emp['id']}",
                     )
 
-        # تقرير السينيور: فلتر بأسماء السينيور + موظف 1، موظف 2... + إجمالي كل موظف + الإجمالي الكلي
         with gm_tabs[2]:
             st.markdown("#### تقرير السينيور")
             seniors_only = [
@@ -3389,7 +3384,6 @@ def render_kpis_module(
                         s_pdf_b = _build_simple_pdf_bytes("Senior KPI Report", [f"Senior: {picked_sen_obj.get('employee_no', '')}", f"Grand Total: {grand_tot_s:g}"])
                         st.download_button("📄 تصدير PDF", data=s_pdf_b, file_name="kpi_senior_report.pdf", mime="application/pdf", key="dl_sen_rep_pdf")
 
-        # تقرير المدير المباشر: فلتر بأسماء المديرين المباشرين + موظف 1، موظف 2... + إجمالي كل موظف + الإجمالي الكلي
         with gm_tabs[3]:
             st.markdown("#### تقرير المدير المباشر")
             managers_only = [
@@ -3468,7 +3462,6 @@ def render_kpis_module(
                         m_pdf_b = _build_simple_pdf_bytes("Direct Manager KPI Report", [f"Manager: {picked_mgr_obj.get('employee_no', '')}", f"Grand Total: {grand_tot_m:g}"])
                         st.download_button("📄 تصدير PDF", data=m_pdf_b, file_name="kpi_manager_report.pdf", mime="application/pdf", key="dl_mgr_rep_pdf")
 
-        # تقرير المدير العام: بدون فلتر + الأسئلة الخاصة بتقييم المدير العام + إجمالي كل مقيِّم + الإجمالي الكلي
         with gm_tabs[4]:
             st.markdown("#### تقرير المدير العام")
             gm_qs = peer_q_by_target.get("gm") or []
@@ -3533,7 +3526,6 @@ def render_kpis_module(
                     st.download_button("📄 تصدير PDF", data=g_pdf_b, file_name="kpi_gm_report.pdf", mime="application/pdf", key="dl_gm_rep_pdf")
         return
 
-    # --- المستخدمون غير المدير العام: تقييم نفسي + السينيور (إن وُجد) + تقييم الموظفين (للمدير المباشر) + المدير المباشر (إن لم يكن المدير العام) + المدير العام للجميع ---
     has_my_senior = bool(str(current_user.get("senior_id") or "").strip())
     my_mgr_id_str = str(current_user.get("direct_manager_id") or "").strip()
     my_mgr_emp = emp_by_any_id.get(my_mgr_id_str)
@@ -3551,7 +3543,6 @@ def render_kpis_module(
     sub_tabs = st.tabs(user_sub_tabs)
     st_idx = 0
 
-    # 1) تقييم نفسي
     with sub_tabs[st_idx]:
         mapped_tab = _map_job_title_to_self_tab(current_user)
         st.markdown(f"#### التقييم الذاتي — **{mapped_tab}**")
@@ -3580,8 +3571,8 @@ def render_kpis_module(
         m2.metric("النسبة المئوية", f"{self_pct:g}%")
 
         st.divider()
-        st.markdown("##### 📊 ملخص الآلي لأداء الفترة")
-        auto_sum = _compute_kpi_period_metrics(
+        st.markdown("##### 📊 السجل الآلي لفترة التقييم")
+        det_self = _build_full_employee_kpi_report_data(
             emp=current_user,
             start_date=kpi_start_dt,
             end_date=kpi_end_dt,
@@ -3591,12 +3582,12 @@ def render_kpis_module(
             advances=advances,
         )
         s1, s2, s3, s4, s5, s6 = st.columns(6)
-        s1.metric("أيام الإجازات", auto_sum["approved_leaves_days"])
-        s2.metric("مرات التأخير", auto_sum["late_days_count"])
-        s3.metric("إضافي معتمد (أيام)", auto_sum["approved_ot_days"])
-        s4.metric("المكافآت (عدد المرات)", auto_sum["rewards_count"])
-        s5.metric("الجزاءات (عدد المرات)", auto_sum["penalties_count"])
-        s6.metric("السلف", f"{auto_sum['total_advances']:,.2f} ج")
+        s1.metric("الإجازات (أيام)", det_self["total_leave_days"])
+        s2.metric("المكافآت (مرات)", det_self["rewards_count"])
+        s3.metric("الجزاءات (مرات)", det_self["penalties_count"])
+        s4.metric("السلف (ج)", f"{det_self['advances_total_amt']:,.2f}")
+        s5.metric("الإضافي (أيام)", det_self["total_ot_days"])
+        s6.metric("التأخيرات (مرات)", det_self["total_late_cnt"])
 
         if st.button("💾 حفظ التقييم الذاتي", type="primary", key="save_kpi_self_btn"):
             upsert_record(
@@ -3609,7 +3600,6 @@ def render_kpis_module(
                     "period_end": kpi_end_dt.isoformat(),
                     "self_scores": self_scores,
                     "self_percentage": self_pct,
-                    "auto_summary": auto_sum,
                     "status": "submitted_by_employee",
                 },
                 on_conflict="employee_id,period_label",
@@ -3626,7 +3616,6 @@ def render_kpis_module(
             st.rerun()
     st_idx += 1
 
-    # 2) تقييم السينيور (يظهر فقط لمن له سينيور)
     if has_my_senior:
         with sub_tabs[st_idx]:
             sen_emp = emp_by_any_id.get(str(current_user.get("senior_id") or "").strip())
@@ -3672,7 +3661,6 @@ def render_kpis_module(
                     st.rerun()
         st_idx += 1
 
-    # 3) تقييم الموظفين (للمدير المباشر: اختيار الاسم فقط -> الأسئلة تلقائياً حسب المسمى الوظيفي للموظف)
     if user_role == "manager":
         with sub_tabs[st_idx]:
             st.markdown("#### تقييم الموظفين التابعين")
@@ -3737,7 +3725,6 @@ def render_kpis_module(
                     st.rerun()
         st_idx += 1
 
-    # 4) تقييم المدير المباشر (يظهر فقط إذا كان للموظف مدير مباشر وليس هو المدير العام)
     if not mgr_is_gm and my_mgr_emp:
         with sub_tabs[st_idx]:
             st.markdown(f"#### تقييم المدير المباشر: **{my_mgr_emp.get('name_ar')}**")
@@ -3781,7 +3768,6 @@ def render_kpis_module(
                 st.rerun()
         st_idx += 1
 
-    # 5) تقييم المدير العام (مفتوح لكل الموظفين بمختلف فئاتهم وأدوارهم)
     with sub_tabs[st_idx]:
         gm_emp = next((e for e in employees if str(e.get("role") or "").lower() == "general_manager"), None)
         gm_target_id = gm_emp["id"] if gm_emp else None
@@ -4261,7 +4247,6 @@ def render_admin_and_staff(
                 st.success("✅ تم حفظ إعدادات النظام.")
                 st.rerun()
 
-    # --- تبويب KPIs داخل الصلاحيات والإعدادات ---
     with tab_kpi_cfg:
         st.markdown("#### ⚙️ إعدادات الـ KPIs")
 
