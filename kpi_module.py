@@ -1,15 +1,15 @@
-from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Optional, Set
+from datetime import date
+from typing import Any, Dict, List, Optional, Set, Tuple
+import base64
+import io
 import json
+import pandas as pd
 import streamlit as st
 
-from db import fetch_table, insert_record, update_record, upsert_record, write_audit_log
+from db import fetch_table, update_record, upsert_record, write_audit_log
 from payroll_engine import build_employee_period_summary
 from rules_engine import parse_date_safe, round_half_up_2
 
-# =====================================================================
-# 1. الثوابت والقوائم الافتراضية للـ KPIs
-# =====================================================================
 KPI_SELF_TABS: List[str] = [
     "استقبال",
     "استقبال وسحب عينات",
@@ -79,9 +79,21 @@ DEFAULT_PEER_QUESTIONS_BY_TARGET: Dict[str, List[Dict[str, Any]]] = {
 }
 
 
-# =====================================================================
-# 2. دوال الحساب والمنطق (قابلة للاستدعاء المباشر في اختبارات الوحدة)
-# =====================================================================
+def build_report_excel_bytes(
+    table_rows: List[Dict[str, Any]],
+    summary_rows: Optional[List[Tuple[str, str]]] = None,
+) -> bytes:
+    """توليد ملف Excel منسق لجدول التقييم وملخص الفترة."""
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        if table_rows:
+            pd.DataFrame(table_rows).to_excel(writer, index=False, sheet_name="KPI_Report")
+        if summary_rows:
+            sum_df = pd.DataFrame([{"البند": k, "القيمة": v} for k, v in summary_rows])
+            sum_df.to_excel(writer, index=False, sheet_name="Period_Summary")
+    return buf.getvalue()
+
+
 def get_emp_identifiers(emp: Dict[str, Any]) -> Set[str]:
     ids: Set[str] = set()
     if emp.get("id"):
@@ -139,7 +151,6 @@ def build_peer_matrix_table(
     question_items: List[Dict[str, Any]],
     raters_scores: Dict[str, Dict[str, float]],
 ) -> Dict[str, Any]:
-    """بناء مصفوفة تقييمات الموظفين لجهة معينة (سينيور / مدير مباشر / مدير عام) مع إجمالي كل مقيّم والإجمالي الكلي."""
     q_names = [str(x.get("question") or "") for x in question_items if str(x.get("question") or "").strip()]
     rater_names = list(raters_scores.keys())
 
@@ -182,7 +193,6 @@ def build_full_employee_kpi_report_data(
     penalties_rewards: List[Dict[str, Any]],
     advances: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    """تجميع التفاصيل الكاملة لفترة التقييم للموظف: الإجازات، المكافآت، الجزاءات، السلف، الإضافي، والتأخيرات بالشهور."""
     emp_ids = get_emp_identifiers(emp)
     emp_id_primary = str(emp.get("id") or "")
 
@@ -366,59 +376,6 @@ def build_full_employee_kpi_report_data(
     }
 
 
-def build_simple_pdf_bytes(title_text: str, lines: List[str]) -> bytes:
-    """توليد ملف PDF قياسي خفيف بدون اعتماد على مكتبات خارجية."""
-    def _escape_pdf_str(s: str) -> str:
-        safe_ascii = s.encode("latin-1", errors="replace").decode("latin-1")
-        return safe_ascii.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
-
-    content_cmds: List[str] = ["BT", "/F1 13 Tf", "40 760 Td", f"({_escape_pdf_str(title_text)}) Tj"]
-    y_pos = 736
-    for ln in lines[:44]:
-        if y_pos < 45:
-            break
-        content_cmds.append(f"1 0 0 1 40 {y_pos} Tm")
-        content_cmds.append("/F1 10 Tf")
-        content_cmds.append(f"({_escape_pdf_str(ln)}) Tj")
-        y_pos -= 15
-    content_cmds.append("ET")
-    stream_data = ("\n".join(content_cmds)).encode("latin-1", errors="replace")
-
-    objs: List[bytes] = [
-        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
-        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
-        (
-            b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
-            b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n"
-        ),
-        b"4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
-        (
-            f"5 0 obj\n<< /Length {len(stream_data)} >>\nstream\n".encode("latin-1")
-            + stream_data
-            + b"\nendstream\nendobj\n"
-        ),
-    ]
-
-    pdf_buf = bytearray(b"%PDF-1.4\n")
-    offsets: List[int] = [0]
-    for obj in objs:
-        offsets.append(len(pdf_buf))
-        pdf_buf.extend(obj)
-
-    xref_pos = len(pdf_buf)
-    pdf_buf.extend(f"xref\n0 {len(objs) + 1}\n".encode("latin-1"))
-    pdf_buf.extend(b"0000000000 65535 f \n")
-    for off in offsets[1:]:
-        pdf_buf.extend(f"{off:010d} 00000 n \n".encode("latin-1"))
-    pdf_buf.extend(
-        f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n".encode("latin-1")
-    )
-    return bytes(pdf_buf)
-
-
-# =====================================================================
-# 3. دوال الواجهة وإدارة إعدادات وأسئلة الـ KPIs
-# =====================================================================
 def get_effective_org_state(org_settings: Dict[str, Any]) -> Dict[str, Any]:
     base = dict(org_settings or {})
     live_patch = st.session_state.get("live_org_patch")
@@ -513,24 +470,26 @@ def _render_q_editor_block(
                 st.warning("يرجى كتابة نص السؤال أولاً.")
 
 
-def _render_printable_and_pdf_actions(
+def _render_printable_and_excel_actions(
     doc_title: str,
     table_rows: List[Dict[str, Any]],
-    pdf_file_name: str,
-    pdf_lines: List[str],
+    excel_file_name: str,
+    summary_rows: Optional[List[Tuple[str, str]]],
     key_suffix: str,
 ) -> None:
     if not table_rows:
         return
     cols_keys = list(table_rows[0].keys())
     hdr_html = "".join(f"<th>{c_k}</th>" for c_k in cols_keys)
-    bdy_html = ""
+    bdy_parts: List[str] = []
     for idx_r, r_item in enumerate(table_rows):
         is_tot = str(r_item.get("البند") or "") == "الإجمالي" and idx_r == len(table_rows) - 1
         tr_cls = " class='tot-row'" if is_tot else ""
-        bdy_html += f"<tr{tr_cls}>" + "".join(f"<td>{r_item[c_k]}</td>" for c_k in cols_keys) + "</tr>"
+        cells_html = "".join(f"<td>{r_item[c_k]}</td>" for c_k in cols_keys)
+        bdy_parts.append(f"<tr{tr_cls}>{cells_html}</tr>")
+    bdy_html = "".join(bdy_parts)
 
-    print_doc_json = json.dumps(
+    print_html_doc = (
         f"<!DOCTYPE html><html dir='rtl' lang='ar'><head><meta charset='utf-8'><title>{doc_title}</title>"
         "<style>"
         "body{font-family:'Cairo',Tahoma,sans-serif;direction:rtl;margin:28px;color:#0f172a;}"
@@ -544,33 +503,31 @@ def _render_printable_and_pdf_actions(
         f"<table><thead><tr>{hdr_html}</tr></thead><tbody>{bdy_html}</tbody></table>"
         "</body></html>"
     )
+    b64_html = base64.b64encode(print_html_doc.encode("utf-8")).decode("ascii")
+    excel_bytes = build_report_excel_bytes(table_rows=table_rows, summary_rows=summary_rows)
 
     p_col_a, p_col_b = st.columns([1.5, 1.5])
     with p_col_a:
-        st.components.v1.html(
-            f"""
-            <div style="direction:rtl;text-align:right;">
-                <button onclick="var w=window.open('','_blank','width=950,height=700');w.document.write({print_doc_json});w.document.close();w.focus();setTimeout(function(){{w.print();}},300);"
-                        style="background:#0f4c5c;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-family:'Cairo',sans-serif;font-size:14px;font-weight:700;cursor:pointer;">
-                    🖨️ طباعة في ورقة مستقلة
-                </button>
-            </div>
-            """,
-            height=50,
+        btn_html = (
+            "<div style='direction:rtl;text-align:right;'>"
+            f"<button data-b64='{b64_html}' onclick=\"var txt=decodeURIComponent(escape(atob(this.getAttribute('data-b64'))));var w=window.open('','_blank','width=950,height=700');w.document.write(txt);w.document.close();w.focus();setTimeout(function(){{w.print();}},300);\" "
+            "style='background:#0f4c5c;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-family:Cairo,sans-serif;font-size:14px;font-weight:700;cursor:pointer;'>"
+            "🖨️ طباعة في ورقة مستقلة"
+            "</button>"
+            "</div>"
         )
+        st.components.v1.html(btn_html, height=50)
     with p_col_b:
-        pdf_bytes = build_simple_pdf_bytes(doc_title, pdf_lines)
         st.download_button(
-            "📄 تصدير PDF",
-            data=pdf_bytes,
-            file_name=pdf_file_name,
-            mime="application/pdf",
-            key=f"dl_kpi_pdf_{key_suffix}",
+            "📥 تحميل التقرير Excel",
+            data=excel_bytes,
+            file_name=excel_file_name,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=f"dl_kpi_xl_{key_suffix}",
         )
 
 
 def render_kpi_settings_tab(org_settings: Dict[str, Any]) -> None:
-    """تبويب إعدادات وأسئلة الـ KPIs داخل شاشة الصلاحيات والإعدادات."""
     eff_org = get_effective_org_state(org_settings)
     st.markdown("#### ⚙️ إعدادات الـ KPIs")
 
@@ -748,7 +705,6 @@ def render_kpis_module(
     self_q_by_tab = get_all_self_questions(eff_org)
     peer_q_by_target = get_all_peer_questions(eff_org)
 
-    # --- حالة المدير العام: تقييم الموظفين + التقارير الأربعة ---
     if user_role == "general_manager":
         gm_tabs = st.tabs([
             "👥 تقييم الموظفين",
@@ -909,22 +865,23 @@ def render_kpis_module(
                     st.markdown("**تفصيل التأخيرات:**")
                     st.dataframe(det["late_list"], use_container_width=True, hide_index=True)
 
-                pdf_lines = [
-                    f"Employee No: {target_rep_emp.get('employee_no', '')}",
-                    f"Period: {kpi_start_dt.isoformat()} to {kpi_end_dt.isoformat()}",
-                    f"Self Total: {tot_self_val:g} | Direct Manager Total: {tot_mgr_val:g}",
-                    f"Leaves: {det['total_leave_days']} (Casual: {det['casual_days']}, Regular: {det['regular_days']})",
-                    f"Rewards: {det['rewards_count']} | Penalties: {det['penalties_count']} | Advances: {det['advances_total_amt']:g}",
-                    f"Overtime Days: {det['total_ot_days']} | Late Count: {det['total_late_cnt']}",
+                emp_summary_xl: List[Tuple[str, str]] = [
+                    ("الاسم", str(target_rep_emp.get("name_ar") or "")),
+                    ("الرقم الوظيفي", str(target_rep_emp.get("employee_no") or "")),
+                    ("الفترة", period_lbl),
+                    ("الإجازات (أيام)", f"{det['total_leave_days']} (عارضة: {det['casual_days']} | اعتيادي: {det['regular_days']})"),
+                    ("المكافآت (مرات)", str(det["rewards_count"])),
+                    ("الجزاءات (مرات)", str(det["penalties_count"])),
+                    ("السلف (ج)", f"{det['advances_total_amt']:,.2f}"),
+                    ("الإضافي (أيام / دقيقة)", f"{det['total_ot_days']} يوم / {det['total_ot_mins']} دقيقة"),
+                    ("التأخيرات (مرات)", str(det["total_late_cnt"])),
                 ]
-                for idx_c, r_c in enumerate(rows_data, start=1):
-                    pdf_lines.append(f"Item {idx_c}: Self={r_c['تقييم الموظف لنفسه']} | Mgr={r_c['تقييم المدير المباشر']}")
 
-                _render_printable_and_pdf_actions(
+                _render_printable_and_excel_actions(
                     doc_title=f"الاسم: {target_rep_emp.get('name_ar')} | الفترة: {period_lbl}",
                     table_rows=rows_data + [total_row],
-                    pdf_file_name=f"kpi_employee_{target_rep_emp.get('employee_no', 'emp')}.pdf",
-                    pdf_lines=pdf_lines,
+                    excel_file_name=f"kpi_employee_{target_rep_emp.get('employee_no', 'emp')}.xlsx",
+                    summary_rows=emp_summary_xl,
                     key_suffix=f"emp_{target_rep_emp['id']}",
                 )
 
@@ -965,11 +922,11 @@ def render_kpis_module(
                     mat_s = build_peer_matrix_table(peer_q_by_target.get("senior") or [], rater_cols_sen)
                     st.dataframe(mat_s["rows"], use_container_width=True, hide_index=True)
                     st.metric("الإجمالي الكلي", f"{mat_s['grand_total']:g}")
-                    _render_printable_and_pdf_actions(
+                    _render_printable_and_excel_actions(
                         doc_title=f"تقرير تقييم السينيور: {picked_sen_obj.get('name_ar')} | الإجمالي الكلي: {mat_s['grand_total']:g}",
                         table_rows=mat_s["rows"],
-                        pdf_file_name="kpi_senior_report.pdf",
-                        pdf_lines=[f"Senior: {picked_sen_obj.get('employee_no', '')}", f"Grand Total: {mat_s['grand_total']:g}"],
+                        excel_file_name="kpi_senior_report.xlsx",
+                        summary_rows=[("السينيور", str(picked_sen_obj.get("name_ar") or "")), ("الإجمالي الكلي", f"{mat_s['grand_total']:g}")],
                         key_suffix="senior_rep",
                     )
 
@@ -1010,11 +967,11 @@ def render_kpis_module(
                     mat_m = build_peer_matrix_table(peer_q_by_target.get("manager") or [], rater_cols_mgr)
                     st.dataframe(mat_m["rows"], use_container_width=True, hide_index=True)
                     st.metric("الإجمالي الكلي", f"{mat_m['grand_total']:g}")
-                    _render_printable_and_pdf_actions(
+                    _render_printable_and_excel_actions(
                         doc_title=f"تقرير تقييم المدير المباشر: {picked_mgr_obj.get('name_ar')} | الإجمالي الكلي: {mat_m['grand_total']:g}",
                         table_rows=mat_m["rows"],
-                        pdf_file_name="kpi_manager_report.pdf",
-                        pdf_lines=[f"Manager: {picked_mgr_obj.get('employee_no', '')}", f"Grand Total: {mat_m['grand_total']:g}"],
+                        excel_file_name="kpi_manager_report.xlsx",
+                        summary_rows=[("المدير المباشر", str(picked_mgr_obj.get("name_ar") or "")), ("الإجمالي الكلي", f"{mat_m['grand_total']:g}")],
                         key_suffix="manager_rep",
                     )
 
@@ -1040,16 +997,15 @@ def render_kpis_module(
                 mat_g = build_peer_matrix_table(peer_q_by_target.get("gm") or [], rater_cols_gm)
                 st.dataframe(mat_g["rows"], use_container_width=True, hide_index=True)
                 st.metric("الإجمالي الكلي", f"{mat_g['grand_total']:g}")
-                _render_printable_and_pdf_actions(
+                _render_printable_and_excel_actions(
                     doc_title=f"تقرير تقييم المدير العام | الإجمالي الكلي: {mat_g['grand_total']:g}",
                     table_rows=mat_g["rows"],
-                    pdf_file_name="kpi_gm_report.pdf",
-                    pdf_lines=[f"Grand Total: {mat_g['grand_total']:g}"],
+                    excel_file_name="kpi_gm_report.xlsx",
+                    summary_rows=[("الإجمالي الكلي", f"{mat_g['grand_total']:g}")],
                     key_suffix="gm_rep",
                 )
         return
 
-    # --- المستخدمون غير المدير العام ---
     has_my_senior = bool(str(current_user.get("senior_id") or "").strip())
     my_mgr_id_str = str(current_user.get("direct_manager_id") or "").strip()
     my_mgr_emp = emp_by_any_id.get(my_mgr_id_str)
