@@ -1,13 +1,37 @@
 from datetime import date, datetime
 import io
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 import pandas as pd
 import streamlit as st
 
 from db import delete_record, fetch_table, insert_record, update_record, write_audit_log
 from rules_engine import get_effective_permissions, parse_date_safe
 
-BASE_REG_COLUMNS: List[str] = ["مسلسل", "البند", "مقدار البند أو التقدير"]
+BASE_REG_COLUMNS: List[str] = ["مسلسل", "البند", "المقدار"]
+
+
+def _apply_regulations_rtl_styles() -> None:
+    st.markdown(
+        """
+        <style>
+            .stApp, .main, [data-testid="stAppViewContainer"], [data-testid="stHeader"],
+            [data-testid="stMarkdownContainer"], [data-testid="stCaptionContainer"],
+            [data-testid="stText"], [data-testid="stTextInput"], [data-testid="stTextArea"],
+            [data-testid="stDateInput"], [data-testid="stExpander"], [data-testid="stForm"],
+            [data-testid="stDataFrame"], [data-testid="stTable"],
+            .stMarkdown, .stCaption, .stText, p, span, div, label, h1, h2, h3, h4, h5, h6 {
+                direction: rtl !important;
+                text-align: right !important;
+            }
+            [data-testid="stDataFrame"] th, [data-testid="stDataFrame"] td,
+            [data-testid="stTable"] th, [data-testid="stTable"] td {
+                text-align: right !important;
+                direction: rtl !important;
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def _can_manage_regulations(current_user: Dict[str, Any]) -> bool:
@@ -43,7 +67,11 @@ def _load_regulations_safe() -> List[Dict[str, Any]]:
 def _get_custom_cols_state(state_key: str) -> List[str]:
     cols = st.session_state.get(state_key)
     if isinstance(cols, list):
-        return [str(c).strip() for c in cols if str(c).strip() and str(c).strip() not in BASE_REG_COLUMNS]
+        return [
+            str(c).strip()
+            for c in cols
+            if str(c).strip() and str(c).strip() not in BASE_REG_COLUMNS
+        ]
     return []
 
 
@@ -52,7 +80,9 @@ def _normalize_items_table(
     fallback_content: str = "",
     extra_cols: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
-    ordered_cols = list(BASE_REG_COLUMNS) + [c for c in (extra_cols or []) if c not in BASE_REG_COLUMNS]
+    ordered_cols = list(BASE_REG_COLUMNS) + [
+        c for c in (extra_cols or []) if c not in BASE_REG_COLUMNS
+    ]
     rows: List[Dict[str, Any]] = []
 
     if isinstance(raw_items, list):
@@ -64,10 +94,16 @@ def _normalize_items_table(
                         sv = item.get("مسلسل") if item.get("مسلسل") is not None else item.get("serial", idx)
                         row_out["مسلسل"] = sv
                     elif col_name == "البند":
-                        row_out["البند"] = str(item.get("البند") or item.get("clause") or item.get("question") or "").strip()
-                    elif col_name == "مقدار البند أو التقدير":
-                        row_out["مقدار البند أو التقدير"] = str(
-                            item.get("مقدار البند أو التقدير") or item.get("amount") or item.get("estimate") or ""
+                        row_out["البند"] = str(
+                            item.get("البند") or item.get("clause") or item.get("question") or ""
+                        ).strip()
+                    elif col_name == "المقدار":
+                        row_out["المقدار"] = str(
+                            item.get("المقدار")
+                            or item.get("مقدار البند أو التقدير")
+                            or item.get("amount")
+                            or item.get("estimate")
+                            or ""
                         ).strip()
                     else:
                         row_out[col_name] = str(item.get(col_name) or "").strip()
@@ -76,14 +112,14 @@ def _normalize_items_table(
 
     if not rows and str(fallback_content or "").strip():
         for idx, ln in enumerate([x.strip() for x in str(fallback_content).splitlines() if x.strip()], start=1):
-            base_row: Dict[str, Any] = {"مسلسل": idx, "البند": ln, "مقدار البند أو التقدير": ""}
+            base_row: Dict[str, Any] = {"مسلسل": idx, "البند": ln, "المقدار": ""}
             for ec in (extra_cols or []):
                 if ec not in base_row:
                     base_row[ec] = ""
             rows.append(base_row)
 
     if not rows:
-        empty_r: Dict[str, Any] = {"مسلسل": 1, "البند": "", "مقدار البند أو التقدير": ""}
+        empty_r: Dict[str, Any] = {"مسلسل": 1, "البند": "", "المقدار": ""}
         for ec in (extra_cols or []):
             if ec not in empty_r:
                 empty_r[ec] = ""
@@ -218,7 +254,11 @@ def _delete_regulation_record(reg_id: Any, title: str, current_user: Dict[str, A
         st.session_state["local_regulations_store"] = local_list
 
 
-def _build_regulation_excel_bytes(reg: Dict[str, Any], org_name: str, items_rows: List[Dict[str, Any]]) -> bytes:
+def _build_regulation_excel_bytes(
+    reg: Dict[str, Any],
+    org_name: str,
+    items_rows: List[Dict[str, Any]],
+) -> bytes:
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         info_df = pd.DataFrame([
@@ -237,6 +277,7 @@ def render_regulations_module(
     current_user: Dict[str, Any],
     org_settings: Dict[str, Any],
 ) -> None:
+    _apply_regulations_rtl_styles()
     st.markdown("### 📜 اللوائح")
     org_name = str((org_settings or {}).get("org_name") or "معامل ا.د أسامة عبد المتعال منصور")
     can_manage = _can_manage_regulations(current_user)
@@ -253,7 +294,7 @@ def render_regulations_module(
             extra_cols = _get_custom_cols_state("new_reg_extra_cols")
             col_add1, col_add2, col_add3 = st.columns([2.5, 1.2, 1.3])
             with col_add1:
-                new_col_name = st.text_input("إضافة عمود جديد للجدول", placeholder="مثال: ملاحظات أو الجزاء", key="new_reg_add_col_inp")
+                new_col_name = st.text_input("إضافة عمود جديد للجدول", placeholder="مثال: ملاحظات", key="new_reg_add_col_inp")
             with col_add2:
                 st.write("")
                 st.write("")
@@ -271,12 +312,12 @@ def render_regulations_module(
                         st.rerun()
 
             all_cols = list(BASE_REG_COLUMNS) + extra_cols
-            base_seed_row: Dict[str, Any] = {"مسلسل": 1, "البند": "", "مقدار البند أو التقدير": ""}
+            base_seed_row: Dict[str, Any] = {"مسلسل": 1, "البند": "", "المقدار": ""}
             for ec in extra_cols:
                 base_seed_row[ec] = ""
             seed_df = pd.DataFrame([base_seed_row])[all_cols]
 
-            st.caption("الجدول يبدأ بـ 3 أعمدة (مسلسل — البند — مقدار البند أو التقدير) ويمكنك إضافة صفوف أو أعمدة إضافية:")
+            st.caption("الجدول: مسلسل — البند — المقدار (مع إمكانية إضافة صفوف أو أعمدة إضافية):")
             edited_new_df = st.data_editor(
                 seed_df,
                 use_container_width=True,
@@ -337,15 +378,20 @@ def render_regulations_module(
             fallback_content=str(reg.get("content") or ""),
             extra_cols=detected_extras,
         )
+        ordered_view_cols = list(BASE_REG_COLUMNS) + detected_extras
+        ordered_rows = [
+            {c: row_d.get(c, "") for c in ordered_view_cols}
+            for row_d in items_rows
+        ]
 
         with st.container(border=True):
             top_c1, top_c2 = st.columns([3.5, 1.5])
             top_c1.markdown(f"#### 📌 {r_title}")
             top_c2.caption(f"تاريخ السريان: `{r_eff or '—'}`")
 
-            st.dataframe(items_rows, use_container_width=True, hide_index=True)
+            st.dataframe(ordered_rows, use_container_width=True, hide_index=True)
 
-            xl_bytes = _build_regulation_excel_bytes(reg, org_name, items_rows)
+            xl_bytes = _build_regulation_excel_bytes(reg, org_name, ordered_rows)
             safe_fname = "".join(ch for ch in r_title if ch.isalnum() or ch in (" ", "_", "-")).strip().replace(" ", "_") or "regulation"
 
             act_cols = st.columns([1.8, 1.2, 6.0])
@@ -373,7 +419,7 @@ def render_regulations_module(
                         key=f"u_reg_d_{idx_r}",
                     )
                     u_edited_df = st.data_editor(
-                        pd.DataFrame(items_rows),
+                        pd.DataFrame(ordered_rows),
                         use_container_width=True,
                         hide_index=True,
                         num_rows="dynamic",
