@@ -13,6 +13,7 @@ from db import (
     write_audit_log,
 )
 from kpi_module import (
+    apply_full_rtl_styles,
     get_effective_org_state,
     render_kpi_settings_tab,
     render_kpis_module as _render_kpis_from_module,
@@ -2627,6 +2628,7 @@ def render_admin_and_staff(
     org_settings: Dict[str, Any],
     official_holidays: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
+    apply_full_rtl_styles()
     st.markdown("### 👥 إدارة الموظفين والفروع والصلاحيات والإعدادات")
     perms = get_effective_permissions(current_user)
     user_id = str(current_user.get("id"))
@@ -2888,12 +2890,14 @@ def render_admin_and_staff(
         )
 
     with tab_perms_hol:
-        st.markdown("#### تخصيص صلاحيات مستخدم محدد (بما في ذلك منح المكافآت للـ Senior)")
+        st.markdown("#### تخصيص صلاحيات مستخدم محدد (بما في ذلك منح المكافآت للـ Senior وشكاوى المرضى)")
         if employees:
             pmap = {f"{e.get('name_ar')} ({e.get('role')})": e for e in employees}
             sel_p = st.selectbox("اختر المستخدم", list(pmap.keys()), key="perm_emp_sel")
             p_emp = pmap[sel_p]
             eff = get_effective_permissions(p_emp)
+            raw_p_dict = p_emp.get("permissions") if isinstance(p_emp.get("permissions"), dict) else {}
+            p_create_cmp_val = bool(raw_p_dict.get("create_complaints", False))
 
             with st.form("edit_perms_form"):
                 pc1, pc2, pc3 = st.columns(3)
@@ -2906,9 +2910,10 @@ def render_admin_and_staff(
                 p_ot = pc5.checkbox("اعتماد الوقت الإضافي", value=eff["approve_overtime"])
                 p_pay = pc6.checkbox("إدارة المرتبات (Payroll)", value=eff["manage_payroll"])
 
-                pc7, pc8 = st.columns(2)
+                pc7, pc8, pc9 = st.columns(3)
                 p_rep = pc7.checkbox("عرض كل التقارير / المتابعة", value=eff["view_all_reports"])
                 p_mon = pc8.checkbox("وضع المتابعة فقط (بدون موافقات)", value=eff["is_monitor_only"])
+                p_cmp = pc9.checkbox("إضافة شكاوى المرضى", value=p_create_cmp_val)
 
                 if st.form_submit_button("حفظ الصلاحيات", type="primary"):
                     update_record("employees", p_emp["id"], {
@@ -2922,6 +2927,7 @@ def render_admin_and_staff(
                             "view_all_reports": p_rep,
                             "manage_settings": eff.get("manage_settings", False),
                             "is_monitor_only": p_mon,
+                            "create_complaints": p_cmp,
                         }
                     })
                     write_audit_log(
