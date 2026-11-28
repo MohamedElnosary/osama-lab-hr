@@ -434,7 +434,8 @@ def save_org_settings_patch(patch: Dict[str, Any]) -> None:
     try:
         existing_rows = fetch_table("org_settings", limit=5)
         if existing_rows and existing_rows[0].get("id") is not None:
-            update_record("org_settings", existing_rows[0]["id"], patch)
+            rec_id = existing_rows[0]["id"]
+            update_record("org_settings", rec_id, patch)
         else:
             upsert_record("org_settings", {"id": "main", **patch}, on_conflict="id")
     except Exception:
@@ -627,7 +628,7 @@ def render_kpi_settings_tab(org_settings: Dict[str, Any]) -> None:
                 )
             elif t_name == "سينيور":
                 _render_q_editor_block(
-                    section_title="أسئلة تقييم السينيور لنفسه",
+                    section_title="أسئلة تقييم السينيور لنفسه (وتقييم الإدارة له)",
                     q_list=list(self_q_all.get("سينيور") or []),
                     form_key="add_self_q_form_senior",
                     del_prefix="del_self_q_senior",
@@ -647,7 +648,7 @@ def render_kpi_settings_tab(org_settings: Dict[str, Any]) -> None:
                 )
             elif t_name == "مدير مباشر":
                 _render_q_editor_block(
-                    section_title="أسئلة تقييم المدير المباشر لنفسه",
+                    section_title="أسئلة تقييم المدير المباشر لنفسه (وتقييم المدير العام له)",
                     q_list=list(self_q_all.get("مدير مباشر") or []),
                     form_key="add_self_q_form_manager",
                     del_prefix="del_self_q_manager",
@@ -747,7 +748,7 @@ def render_kpis_module(
     self_q_by_tab = get_all_self_questions(eff_org)
     peer_q_by_target = get_all_peer_questions(eff_org)
 
-    # --- حالة المدير العام: تقييم الموظفين + التقارير الأربعة ---
+    # --- حالة المدير العام: تقييم الموظفين (على أسئلة التقييم الذاتي/القيادي لكل فئة) + التقارير الأربعة ---
     if user_role == "general_manager":
         gm_tabs = st.tabs([
             "👥 تقييم الموظفين",
@@ -779,7 +780,7 @@ def render_kpis_module(
                         {
                             "employee_id": picked_remp["id"],
                             "manager_id": user_id,
-                            "period_label": f"{period_lbl} | مدير عام ({remp_tab_cat})",
+                            "period_label": f"{period_lbl} | مدير مباشر ({remp_tab_cat})",
                             "period_start": kpi_start_dt.isoformat(),
                             "period_end": kpi_end_dt.isoformat(),
                             "manager_scores": sc_map,
@@ -788,13 +789,13 @@ def render_kpis_module(
                         },
                         on_conflict="employee_id,period_label",
                     )
-                    st.success(f"✅ تم حفظ تقييم الموظف {picked_remp.get('name_ar')} بنجاح.")
+                    st.success(f"✅ تم حفظ تقييم ({picked_remp.get('name_ar')}) بنجاح.")
                     st.rerun()
 
                 _render_slider_rating_form(
                     q_items=self_q_by_tab.get(remp_tab_cat) or [],
                     key_prefix=f"gm_rate_sl_{picked_remp['id']}",
-                    save_btn_label="💾 حفظ تقييم الموظف",
+                    save_btn_label="💾 حفظ التقييم",
                     save_btn_key=f"save_gm_rate_emp_{picked_remp['id']}",
                     on_save_callback=_save_gm_emp_eval,
                 )
