@@ -1,5 +1,6 @@
 from datetime import date
 from typing import Any, Dict, List, Optional, Set, Tuple
+import base64
 import json
 import streamlit as st
 
@@ -7,9 +8,6 @@ from db import fetch_table, update_record, upsert_record, write_audit_log
 from payroll_engine import build_employee_period_summary
 from rules_engine import parse_date_safe, round_half_up_2
 
-# =====================================================================
-# 1. الثوابت والقوائم الافتراضية للـ KPIs
-# =====================================================================
 KPI_SELF_TABS: List[str] = [
     "استقبال",
     "استقبال وسحب عينات",
@@ -78,227 +76,118 @@ DEFAULT_PEER_QUESTIONS_BY_TARGET: Dict[str, List[Dict[str, Any]]] = {
     ],
 }
 
-_AR_FORMS: Dict[str, Tuple[str, str, str, str]] = {
-    chr(0x0627): (chr(0xFE8D), chr(0xFE8D), chr(0xFE8E), chr(0xFE8E)),
-    chr(0x0628): (chr(0xFE8F), chr(0xFE91), chr(0xFE92), chr(0xFE90)),
-    chr(0x062A): (chr(0xFE95), chr(0xFE97), chr(0xFE98), chr(0xFE96)),
-    chr(0x062B): (chr(0xFE99), chr(0xFE9B), chr(0xFE9C), chr(0xFE9A)),
-    chr(0x062C): (chr(0xFE9D), chr(0xFE9F), chr(0xFEA0), chr(0xFE9E)),
-    chr(0x062D): (chr(0xFEA1), chr(0xFEA3), chr(0xFEA4), chr(0xFEA2)),
-    chr(0x062E): (chr(0xFEA5), chr(0xFEA7), chr(0xFEA8), chr(0xFEA6)),
-    chr(0x062F): (chr(0xFEA9), chr(0xFEA9), chr(0xFEAA), chr(0xFEAA)),
-    chr(0x0630): (chr(0xFEAB), chr(0xFEAB), chr(0xFEAC), chr(0xFEAC)),
-    chr(0x0631): (chr(0xFEAD), chr(0xFEAD), chr(0xFEAE), chr(0xFEAE)),
-    chr(0x0632): (chr(0xFEAF), chr(0xFEAF), chr(0xFEB0), chr(0xFEB0)),
-    chr(0x0633): (chr(0xFEB1), chr(0xFEB3), chr(0xFEB4), chr(0xFEB2)),
-    chr(0x0634): (chr(0xFEB5), chr(0xFEB7), chr(0xFEB8), chr(0xFEB6)),
-    chr(0x0635): (chr(0xFEB9), chr(0xFEBB), chr(0xFEBC), chr(0xFEBA)),
-    chr(0x0636): (chr(0xFEBD), chr(0xFEBF), chr(0xFEC0), chr(0xFEBE)),
-    chr(0x0637): (chr(0xFEC1), chr(0xFEC3), chr(0xFEC4), chr(0xFEC2)),
-    chr(0x0638): (chr(0xFEC5), chr(0xFEC7), chr(0xFEC8), chr(0xFEC6)),
-    chr(0x0639): (chr(0xFEC9), chr(0xFECB), chr(0xFECC), chr(0xFECA)),
-    chr(0x063A): (chr(0xFECD), chr(0xFECF), chr(0xFED0), chr(0xFECE)),
-    chr(0x0641): (chr(0xFED1), chr(0xFED3), chr(0xFED4), chr(0xFED2)),
-    chr(0x0642): (chr(0xFED5), chr(0xFED7), chr(0xFED8), chr(0xFED6)),
-    chr(0x0643): (chr(0xFED9), chr(0xFEDB), chr(0xFEDC), chr(0xFEDA)),
-    chr(0x0644): (chr(0xFEDD), chr(0xFEDF), chr(0xFEE0), chr(0xFEDE)),
-    chr(0x0645): (chr(0xFEE1), chr(0xFEE3), chr(0xFEE4), chr(0xFEE2)),
-    chr(0x0646): (chr(0xFEE5), chr(0xFEE7), chr(0xFEE8), chr(0xFEE6)),
-    chr(0x0647): (chr(0xFEE9), chr(0xFEEB), chr(0xFEEC), chr(0xFEEA)),
-    chr(0x0648): (chr(0xFEED), chr(0xFEED), chr(0xFEEE), chr(0xFEEE)),
-    chr(0x0649): (chr(0xFEEF), chr(0xFEEF), chr(0xFEF0), chr(0xFEF0)),
-    chr(0x064A): (chr(0xFEF1), chr(0xFEF3), chr(0xFEF4), chr(0xFEF2)),
-    chr(0x0621): (chr(0xFE80), chr(0xFE80), chr(0xFE80), chr(0xFE80)),
-    chr(0x0622): (chr(0xFE81), chr(0xFE81), chr(0xFE82), chr(0xFE82)),
-    chr(0x0623): (chr(0xFE83), chr(0xFE83), chr(0xFE84), chr(0xFE84)),
-    chr(0x0624): (chr(0xFE85), chr(0xFE85), chr(0xFE86), chr(0xFE86)),
-    chr(0x0625): (chr(0xFE87), chr(0xFE87), chr(0xFE88), chr(0xFE88)),
-    chr(0x0626): (chr(0xFE89), chr(0xFE8B), chr(0xFE8C), chr(0xFE8A)),
-    chr(0x0629): (chr(0xFE93), chr(0xFE93), chr(0xFE94), chr(0xFE94)),
-}
-_NO_NEXT_JOIN: Set[str] = {
-    chr(0x0627), chr(0x0622), chr(0x0623), chr(0x0625), chr(0x0621),
-    chr(0x0624), chr(0x0629), chr(0x062F), chr(0x0630), chr(0x0631),
-    chr(0x0632), chr(0x0648), chr(0xFEEF),
-}
-_NO_PREV_JOIN: Set[str] = {chr(0x0621)}
-_DIACRITICS: Set[str] = {
-    chr(0x064B), chr(0x064C), chr(0x064D), chr(0x064E),
-    chr(0x064F), chr(0x0650), chr(0x0651), chr(0x0652), chr(0x0670),
-}
 
-
-def _shape_arabic_rtl(text: str) -> str:
-    s = "".join(ch for ch in str(text or "") if ch not in _DIACRITICS)
-    n = len(s)
-    if n == 0:
-        return ""
-    shaped: List[str] = []
-    for i, ch in enumerate(s):
-        if ch not in _AR_FORMS:
-            shaped.append(ch)
-            continue
-        prev_ch = s[i - 1] if i > 0 else ""
-        next_ch = s[i + 1] if i + 1 < n else ""
-        can_prev = (prev_ch in _AR_FORMS) and (prev_ch not in _NO_NEXT_JOIN) and (ch not in _NO_PREV_JOIN)
-        can_next = (next_ch in _AR_FORMS) and (next_ch not in _NO_PREV_JOIN) and (ch not in _NO_NEXT_JOIN)
-        iso_f, init_f, med_f, fin_f = _AR_FORMS[ch]
-        if can_prev and can_next:
-            shaped.append(med_f)
-        elif can_prev:
-            shaped.append(fin_f)
-        elif can_next:
-            shaped.append(init_f)
-        else:
-            shaped.append(iso_f)
-    return "".join(reversed(shaped))
-
-
-def _encode_pdf_text_literal(text: str) -> str:
-    txt = str(text or "")
-    has_ar = any((ch in _AR_FORMS) or (chr(0x0600) <= ch <= chr(0x06FF)) for ch in txt)
-    out_str = _shape_arabic_rtl(txt) if has_ar else txt
-    raw_bytes = out_str.encode("utf-16-be", errors="ignore") if has_ar else out_str.encode("latin-1", errors="replace")
-    escaped: List[str] = []
-    for b in raw_bytes:
-        if b in (0x28, 0x29, 0x5C):
-            escaped.append(chr(0x5C) + chr(b))
-        else:
-            escaped.append(chr(b))
-    return "(" + "".join(escaped) + ")"
-
-
-def build_arabic_table_pdf_bytes(
+def build_report_pdf_bytes(
     report_title: str,
     subtitle_text: str,
     headers: List[str],
     rows: List[List[str]],
     summary_rows: Optional[List[Tuple[str, str]]] = None,
 ) -> bytes:
-    """إنشاء ملف PDF جدولي مرتب وواضح لعرض نتائج التقييم وملخص الفترة."""
+    """بناء ملف PDF منظم بجدول واضح للنتائج والملخص."""
     page_w = 595.0
     page_h = 842.0
     margin_x = 32.0
     usable_w = page_w - 2 * margin_x
-
     cmds: List[str] = []
 
-    def _draw_rect(
-        x: float,
-        y: float,
-        w: float,
-        h: float,
-        fill_rgb: Optional[Tuple[float, float, float]] = None,
-        stroke_rgb: Tuple[float, float, float] = (0.2, 0.28, 0.36),
-    ) -> None:
-        if fill_rgb is not None:
-            cmds.append(f"{fill_rgb[0]:.3f} {fill_rgb[1]:.3f} {fill_rgb[2]:.3f} rg")
-        cmds.append(f"{stroke_rgb[0]:.3f} {stroke_rgb[1]:.3f} {stroke_rgb[2]:.3f} RG")
-        cmds.append("0.75 w")
-        mode = "B" if fill_rgb is not None else "S"
-        cmds.append(f"{x:.2f} {y:.2f} {w:.2f} {h:.2f} re {mode}")
+    def _safe_pdf_ascii(txt: str) -> str:
+        raw = str(txt or "").encode("ascii", errors="replace").decode("ascii")
+        return raw.replace("\\", "/").replace("(", "[").replace(")", "]")
 
-    def _draw_text(
-        x: float,
-        y: float,
-        text: str,
-        font_sz: float = 10.5,
-        rgb: Tuple[float, float, float] = (0.06, 0.09, 0.16),
-        bold: bool = False,
-    ) -> None:
-        font_name = "/F2" if bold else "/F1"
-        lit = _encode_pdf_text_literal(text)
+    def _rect(x: float, y: float, w: float, h: float, fill: Optional[Tuple[float, float, float]] = None) -> None:
+        if fill is not None:
+            cmds.append(f"{fill[0]:.3f} {fill[1]:.3f} {fill[2]:.3f} rg")
+        cmds.append("0.20 0.28 0.36 RG")
+        cmds.append("0.75 w")
+        op = "B" if fill is not None else "S"
+        cmds.append(f"{x:.2f} {y:.2f} {w:.2f} {h:.2f} re {op}")
+
+    def _txt(x: float, y: float, text: str, sz: float = 10.0, color: Tuple[float, float, float] = (0.06, 0.09, 0.16)) -> None:
         cmds.append("BT")
-        cmds.append(f"{font_name} {font_sz:.1f} Tf")
-        cmds.append(f"{rgb[0]:.3f} {rgb[1]:.3f} {rgb[2]:.3f} rg")
+        cmds.append(f"/F1 {sz:.1f} Tf")
+        cmds.append(f"{color[0]:.3f} {color[1]:.3f} {color[2]:.3f} rg")
         cmds.append(f"{x:.2f} {y:.2f} Td")
-        cmds.append(f"{lit} Tj")
+        cmds.append(f"({_safe_pdf_ascii(text)}) Tj")
         cmds.append("ET")
 
-    _draw_rect(margin_x, page_h - 72, usable_w, 42, fill_rgb=(0.06, 0.30, 0.36), stroke_rgb=(0.06, 0.30, 0.36))
-    _draw_text(margin_x + 14, page_h - 56, report_title, font_sz=13.0, rgb=(1.0, 1.0, 1.0), bold=True)
-    _draw_text(margin_x + 14, page_h - 69, subtitle_text, font_sz=9.5, rgb=(0.88, 0.95, 0.98), bold=False)
+    _rect(margin_x, page_h - 70, usable_w, 40, fill=(0.06, 0.30, 0.36))
+    _txt(margin_x + 12, page_h - 54, report_title, sz=12.5, color=(1.0, 1.0, 1.0))
+    _txt(margin_x + 12, page_h - 66, subtitle_text, sz=9.0, color=(0.88, 0.95, 0.98))
 
-    cur_y = page_h - 96
-
+    cur_y = page_h - 92
     if headers and rows:
-        num_cols = len(headers)
-        col_w = usable_w / num_cols
+        n_cols = len(headers)
+        col_w = usable_w / n_cols
         row_h = 24.0
 
-        _draw_rect(margin_x, cur_y - row_h, usable_w, row_h, fill_rgb=(0.94, 0.96, 0.98))
-        for c_i, h_lbl in enumerate(headers):
-            cx = margin_x + c_i * col_w
-            _draw_rect(cx, cur_y - row_h, col_w, row_h, fill_rgb=None)
-            _draw_text(cx + 8, cur_y - row_h + 7.5, str(h_lbl), font_sz=10.0, rgb=(0.06, 0.09, 0.16), bold=True)
+        _rect(margin_x, cur_y - row_h, usable_w, row_h, fill=(0.93, 0.95, 0.98))
+        for idx_h, h_val in enumerate(headers):
+            hx = margin_x + idx_h * col_w
+            _rect(hx, cur_y - row_h, col_w, row_h, fill=None)
+            _txt(hx + 8, cur_y - row_h + 7.5, h_val, sz=10.0)
         cur_y -= row_h
 
-        for r_i, r_vals in enumerate(rows):
+        for idx_r, r_vals in enumerate(rows):
             if cur_y - row_h < 70:
                 break
-            is_total_row = (r_i == len(rows) - 1) and ("الإجمالي" in str(r_vals[0] if r_vals else ""))
-            bg_c = (0.88, 0.91, 0.94) if is_total_row else ((0.99, 0.99, 1.0) if r_i % 2 == 1 else (1.0, 1.0, 1.0))
-            _draw_rect(margin_x, cur_y - row_h, usable_w, row_h, fill_rgb=bg_c)
-            for c_i in range(num_cols):
-                cx = margin_x + c_i * col_w
-                val_s = str(r_vals[c_i] if c_i < len(r_vals) else "")
-                _draw_rect(cx, cur_y - row_h, col_w, row_h, fill_rgb=None)
-                _draw_text(cx + 8, cur_y - row_h + 7.5, val_s, font_sz=10.0, bold=is_total_row)
+            is_last = idx_r == len(rows) - 1
+            bg = (0.87, 0.90, 0.94) if is_last else ((0.99, 0.99, 1.0) if idx_r % 2 == 1 else (1.0, 1.0, 1.0))
+            _rect(margin_x, cur_y - row_h, usable_w, row_h, fill=bg)
+            for idx_c in range(n_cols):
+                cx = margin_x + idx_c * col_w
+                val_str = r_vals[idx_c] if idx_c < len(r_vals) else ""
+                _rect(cx, cur_y - row_h, col_w, row_h, fill=None)
+                _txt(cx + 8, cur_y - row_h + 7.5, val_str, sz=10.0)
             cur_y -= row_h
 
     if summary_rows:
         cur_y -= 18
-        if cur_y - 24 >= 50:
-            _draw_text(margin_x, cur_y, "ملخص الفترة التفصيلي", font_sz=11.5, rgb=(0.06, 0.30, 0.36), bold=True)
-            cur_y -= 10
-            s_row_h = 22.0
-            half_w = usable_w / 2.0
-            for k_lbl, v_lbl in summary_rows:
-                if cur_y - s_row_h < 45:
-                    break
-                _draw_rect(margin_x, cur_y - s_row_h, half_w, s_row_h, fill_rgb=(0.97, 0.98, 0.99))
-                _draw_rect(margin_x + half_w, cur_y - s_row_h, half_w, s_row_h, fill_rgb=(1.0, 1.0, 1.0))
-                _draw_text(margin_x + 8, cur_y - s_row_h + 6.5, str(k_lbl), font_sz=9.8, bold=True)
-                _draw_text(margin_x + half_w + 8, cur_y - s_row_h + 6.5, str(v_lbl), font_sz=9.8, bold=False)
-                cur_y -= s_row_h
+        s_h = 22.0
+        half_w = usable_w / 2.0
+        for s_k, s_v in summary_rows:
+            if cur_y - s_h < 45:
+                break
+            _rect(margin_x, cur_y - s_h, half_w, s_h, fill=(0.97, 0.98, 0.99))
+            _rect(margin_x + half_w, cur_y - s_h, half_w, s_h, fill=(1.0, 1.0, 1.0))
+            _txt(margin_x + 8, cur_y - s_h + 6.5, s_k, sz=9.5)
+            _txt(margin_x + half_w + 8, cur_y - s_h + 6.5, s_v, sz=9.5)
+            cur_y -= s_h
 
-    stream_bytes = ("\n".join(cmds)).encode("latin-1", errors="replace")
+    stream_data = ("\n".join(cmds)).encode("ascii", errors="replace")
 
     objs: List[bytes] = [
         b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
         b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
         (
             f"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {page_w:.0f} {page_h:.0f}] "
-            b"/Resources << /Font << /F1 4 0 R /F2 4 0 R >> >> /Contents 5 0 R >>\nendobj\n"
-        ).encode("latin-1"),
+            b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n"
+        ).encode("ascii"),
         b"4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
         (
-            f"5 0 obj\n<< /Length {len(stream_bytes)} >>\nstream\n".encode("latin-1")
-            + stream_bytes
+            f"5 0 obj\n<< /Length {len(stream_data)} >>\nstream\n".encode("ascii")
+            + stream_data
             + b"\nendstream\nendobj\n"
         ),
     ]
 
-    pdf_buf = bytearray(b"%PDF-1.4\n")
+    buf = bytearray(b"%PDF-1.4\n")
     offsets: List[int] = [0]
     for obj in objs:
-        offsets.append(len(pdf_buf))
-        pdf_buf.extend(obj)
+        offsets.append(len(buf))
+        buf.extend(obj)
 
-    xref_pos = len(pdf_buf)
-    pdf_buf.extend(f"xref\n0 {len(objs) + 1}\n".encode("latin-1"))
-    pdf_buf.extend(b"0000000000 65535 f \n")
+    xref_pos = len(buf)
+    buf.extend(f"xref\n0 {len(objs) + 1}\n".encode("ascii"))
+    buf.extend(b"0000000000 65535 f \n")
     for off in offsets[1:]:
-        pdf_buf.extend(f"{off:010d} 00000 n \n".encode("latin-1"))
-    pdf_buf.extend(
-        f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n".encode("latin-1")
+        buf.extend(f"{off:010d} 00000 n \n".encode("ascii"))
+    buf.extend(
+        f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n".encode("ascii")
     )
-    return bytes(pdf_buf)
+    return bytes(buf)
 
 
-# =====================================================================
-# 2. دوال الحساب والمنطق (قابلة للاستدعاء المباشر في اختبارات الوحدة)
-# =====================================================================
 def get_emp_identifiers(emp: Dict[str, Any]) -> Set[str]:
     ids: Set[str] = set()
     if emp.get("id"):
@@ -356,7 +245,6 @@ def build_peer_matrix_table(
     question_items: List[Dict[str, Any]],
     raters_scores: Dict[str, Dict[str, float]],
 ) -> Dict[str, Any]:
-    """بناء مصفوفة تقييمات الموظفين لجهة معينة (سينيور / مدير مباشر / مدير عام) مع إجمالي كل مقيّم والإجمالي الكلي."""
     q_names = [str(x.get("question") or "") for x in question_items if str(x.get("question") or "").strip()]
     rater_names = list(raters_scores.keys())
 
@@ -399,7 +287,6 @@ def build_full_employee_kpi_report_data(
     penalties_rewards: List[Dict[str, Any]],
     advances: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    """تجميع التفاصيل الكاملة لفترة التقييم للموظف: الإجازات، المكافآت، الجزاءات، السلف، الإضافي، والتأخيرات بالشهور."""
     emp_ids = get_emp_identifiers(emp)
     emp_id_primary = str(emp.get("id") or "")
 
@@ -583,9 +470,6 @@ def build_full_employee_kpi_report_data(
     }
 
 
-# =====================================================================
-# 3. دوال الواجهة وإدارة إعدادات وأسئلة الـ KPIs
-# =====================================================================
 def get_effective_org_state(org_settings: Dict[str, Any]) -> Dict[str, Any]:
     base = dict(org_settings or {})
     live_patch = st.session_state.get("live_org_patch")
@@ -714,13 +598,13 @@ def _render_printable_and_pdf_actions(
         f"<table><thead><tr>{hdr_html}</tr></thead><tbody>{bdy_html}</tbody></table>"
         "</body></html>"
     )
-    print_doc_json = json.dumps(print_html_doc)
+    b64_html = base64.b64encode(print_html_doc.encode("utf-8")).decode("ascii")
 
     pdf_rows_list: List[List[str]] = [
         [str(r_item.get(c_k, "")) for c_k in cols_keys]
         for r_item in table_rows
     ]
-    pdf_bytes = build_arabic_table_pdf_bytes(
+    pdf_bytes = build_report_pdf_bytes(
         report_title=doc_title,
         subtitle_text=subtitle_text,
         headers=cols_keys,
@@ -732,7 +616,7 @@ def _render_printable_and_pdf_actions(
     with p_col_a:
         btn_html = (
             "<div style='direction:rtl;text-align:right;'>"
-            f"<button onclick=\"var w=window.open('','_blank','width=950,height=700');w.document.write({print_doc_json});w.document.close();w.focus();setTimeout(function(){{w.print();}},300);\" "
+            f"<button data-b64='{b64_html}' onclick=\"var txt=decodeURIComponent(escape(atob(this.getAttribute('data-b64'))));var w=window.open('','_blank','width=950,height=700');w.document.write(txt);w.document.close();w.focus();setTimeout(function(){{w.print();}},300);\" "
             "style='background:#0f4c5c;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-family:Cairo,sans-serif;font-size:14px;font-weight:700;cursor:pointer;'>"
             "🖨️ طباعة في ورقة مستقلة"
             "</button>"
@@ -750,7 +634,6 @@ def _render_printable_and_pdf_actions(
 
 
 def render_kpi_settings_tab(org_settings: Dict[str, Any]) -> None:
-    """تبويب إعدادات وأسئلة الـ KPIs داخل شاشة الصلاحيات والإعدادات."""
     eff_org = get_effective_org_state(org_settings)
     st.markdown("#### ⚙️ إعدادات الـ KPIs")
 
@@ -1089,10 +972,10 @@ def render_kpis_module(
                     st.dataframe(det["late_list"], use_container_width=True, hide_index=True)
 
                 emp_summary_pdf: List[Tuple[str, str]] = [
-                    ("الرقم الوظيفي", str(target_rep_emp.get("employee_no") or "—")),
-                    ("الإجازات (أيام)", f"{det['total_leave_days']} (عارضة: {det['casual_days']} | اعتيادي: {det['regular_days']})"),
-                    ("المكافآت / الجزاءات", f"مكافآت: {det['rewards_count']} | جزاءات: {det['penalties_count']}"),
-                    ("السلف / الإضافي / التأخيرات", f"سلف: {det['advances_total_amt']:,.2f} ج | إضافي: {det['total_ot_days']} ي | تأخيرات: {det['total_late_cnt']}"),
+                    ("Emp No", str(target_rep_emp.get("employee_no") or "-")),
+                    ("Leaves Days", f"{det['total_leave_days']} (Casual: {det['casual_days']} | Regular: {det['regular_days']})"),
+                    ("Rewards / Penalties", f"Rewards: {det['rewards_count']} | Penalties: {det['penalties_count']}"),
+                    ("Advances / OT / Late", f"Advances: {det['advances_total_amt']:,.2f} | OT: {det['total_ot_days']} d | Late: {det['total_late_cnt']}"),
                 ]
 
                 _render_printable_and_pdf_actions(
@@ -1143,10 +1026,10 @@ def render_kpis_module(
                     st.metric("الإجمالي الكلي", f"{mat_s['grand_total']:g}")
                     _render_printable_and_pdf_actions(
                         doc_title=f"تقرير تقييم السينيور: {picked_sen_obj.get('name_ar')}",
-                        subtitle_text=f"الفترة: {period_lbl} | الإجمالي الكلي: {mat_s['grand_total']:g}",
+                        subtitle_text=f"الفترة: {period_lbl} | Grand Total: {mat_s['grand_total']:g}",
                         table_rows=mat_s["rows"],
                         pdf_file_name="kpi_senior_report.pdf",
-                        summary_rows=[("الإجمالي الكلي", f"{mat_s['grand_total']:g}")],
+                        summary_rows=[("Grand Total", f"{mat_s['grand_total']:g}")],
                         key_suffix="senior_rep",
                     )
 
@@ -1189,10 +1072,10 @@ def render_kpis_module(
                     st.metric("الإجمالي الكلي", f"{mat_m['grand_total']:g}")
                     _render_printable_and_pdf_actions(
                         doc_title=f"تقرير تقييم المدير المباشر: {picked_mgr_obj.get('name_ar')}",
-                        subtitle_text=f"الفترة: {period_lbl} | الإجمالي الكلي: {mat_m['grand_total']:g}",
+                        subtitle_text=f"الفترة: {period_lbl} | Grand Total: {mat_m['grand_total']:g}",
                         table_rows=mat_m["rows"],
                         pdf_file_name="kpi_manager_report.pdf",
-                        summary_rows=[("الإجمالي الكلي", f"{mat_m['grand_total']:g}")],
+                        summary_rows=[("Grand Total", f"{mat_m['grand_total']:g}")],
                         key_suffix="manager_rep",
                     )
 
@@ -1220,10 +1103,10 @@ def render_kpis_module(
                 st.metric("الإجمالي الكلي", f"{mat_g['grand_total']:g}")
                 _render_printable_and_pdf_actions(
                     doc_title="تقرير تقييم المدير العام",
-                    subtitle_text=f"الفترة: {period_lbl} | الإجمالي الكلي: {mat_g['grand_total']:g}",
+                    subtitle_text=f"الفترة: {period_lbl} | Grand Total: {mat_g['grand_total']:g}",
                     table_rows=mat_g["rows"],
                     pdf_file_name="kpi_gm_report.pdf",
-                    summary_rows=[("الإجمالي الكلي", f"{mat_g['grand_total']:g}")],
+                    summary_rows=[("Grand Total", f"{mat_g['grand_total']:g}")],
                     key_suffix="gm_rep",
                 )
         return
