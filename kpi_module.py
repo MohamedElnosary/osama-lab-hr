@@ -153,7 +153,7 @@ def build_peer_matrix_table(
 
     for qn in q_names:
         row_d: Dict[str, Any] = {"البند": qn}
-        for rn in r_names:
+        for rn in rater_names:
             val_r = round_half_up_2(float((raters_scores[rn] or {}).get(qn) or 0.0))
             row_d[rn] = val_r
             rater_totals[rn] = round_half_up_2(rater_totals[rn] + val_r)
@@ -162,7 +162,7 @@ def build_peer_matrix_table(
     grand_total = round_half_up_2(sum(rater_totals.values()))
     if rater_names:
         tot_row: Dict[str, Any] = {"البند": "الإجمالي"}
-        for rn in r_names:
+        for rn in rater_names:
             tot_row[rn] = rater_totals[rn]
         matrix_rows.append(tot_row)
 
@@ -748,7 +748,7 @@ def render_kpis_module(
     self_q_by_tab = get_all_self_questions(eff_org)
     peer_q_by_target = get_all_peer_questions(eff_org)
 
-    # --- حالة المدير العام: تقييم الموظفين (على أسئلة التقييم الذاتي/القيادي لكل فئة) + التقارير الأربعة ---
+    # --- حالة المدير العام: تقييم الموظفين + التقارير الأربعة ---
     if user_role == "general_manager":
         gm_tabs = st.tabs([
             "👥 تقييم الموظفين",
@@ -834,14 +834,17 @@ def render_kpis_module(
                 mgr_scores_map: Dict[str, float] = (mgr_eval_rec or {}).get("manager_scores") or {}
 
                 cat_for_emp = map_job_title_to_self_tab(target_rep_emp)
-                base_q_list = [str(x.get("question") or "") for x in (self_q_by_tab.get(cat_for_emp) or []) if str(x.get("question") or "").strip()]
-                all_criteria_names = list(dict.fromkeys(base_q_list + list(self_scores_map.keys()) + list(mgr_scores_map.keys())))
+                emp_own_questions = [
+                    str(x.get("question") or "")
+                    for x in (self_q_by_tab.get(cat_for_emp) or [])
+                    if str(x.get("question") or "").strip()
+                ]
 
                 rows_data: List[Dict[str, Any]] = []
                 tot_self_val = 0.0
                 tot_mgr_val = 0.0
 
-                for crit_q in all_criteria_names:
+                for crit_q in emp_own_questions:
                     s_val = round_half_up_2(float(self_scores_map.get(crit_q) or 0.0))
                     m_val = round_half_up_2(float(mgr_scores_map.get(crit_q) or 0.0))
                     tot_self_val = round_half_up_2(tot_self_val + s_val)
