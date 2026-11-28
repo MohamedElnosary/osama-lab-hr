@@ -1,13 +1,15 @@
-from datetime import date
-from typing import Any, Dict, List, Optional, Set, Tuple
-import base64
+from datetime import date, datetime, timedelta
+from typing import Any, Dict, List, Optional, Set
 import json
 import streamlit as st
 
-from db import fetch_table, update_record, upsert_record, write_audit_log
+from db import fetch_table, insert_record, update_record, upsert_record, write_audit_log
 from payroll_engine import build_employee_period_summary
 from rules_engine import parse_date_safe, round_half_up_2
 
+# =====================================================================
+# 1. الثوابت والقوائم الافتراضية للـ KPIs
+# =====================================================================
 KPI_SELF_TABS: List[str] = [
     "استقبال",
     "استقبال وسحب عينات",
@@ -77,117 +79,9 @@ DEFAULT_PEER_QUESTIONS_BY_TARGET: Dict[str, List[Dict[str, Any]]] = {
 }
 
 
-def build_report_pdf_bytes(
-    report_title: str,
-    subtitle_text: str,
-    headers: List[str],
-    rows: List[List[str]],
-    summary_rows: Optional[List[Tuple[str, str]]] = None,
-) -> bytes:
-    """بناء ملف PDF منظم بجدول واضح للنتائج والملخص."""
-    page_w = 595.0
-    page_h = 842.0
-    margin_x = 32.0
-    usable_w = page_w - 2 * margin_x
-    cmds: List[str] = []
-
-    def _safe_pdf_ascii(txt: str) -> str:
-        raw = str(txt or "").encode("ascii", errors="replace").decode("ascii")
-        return raw.replace("\\", "/").replace("(", "[").replace(")", "]")
-
-    def _rect(x: float, y: float, w: float, h: float, fill: Optional[Tuple[float, float, float]] = None) -> None:
-        if fill is not None:
-            cmds.append(f"{fill[0]:.3f} {fill[1]:.3f} {fill[2]:.3f} rg")
-        cmds.append("0.20 0.28 0.36 RG")
-        cmds.append("0.75 w")
-        op = "B" if fill is not None else "S"
-        cmds.append(f"{x:.2f} {y:.2f} {w:.2f} {h:.2f} re {op}")
-
-    def _txt(x: float, y: float, text: str, sz: float = 10.0, color: Tuple[float, float, float] = (0.06, 0.09, 0.16)) -> None:
-        cmds.append("BT")
-        cmds.append(f"/F1 {sz:.1f} Tf")
-        cmds.append(f"{color[0]:.3f} {color[1]:.3f} {color[2]:.3f} rg")
-        cmds.append(f"{x:.2f} {y:.2f} Td")
-        cmds.append(f"({_safe_pdf_ascii(text)}) Tj")
-        cmds.append("ET")
-
-    _rect(margin_x, page_h - 70, usable_w, 40, fill=(0.06, 0.30, 0.36))
-    _txt(margin_x + 12, page_h - 54, report_title, sz=12.5, color=(1.0, 1.0, 1.0))
-    _txt(margin_x + 12, page_h - 66, subtitle_text, sz=9.0, color=(0.88, 0.95, 0.98))
-
-    cur_y = page_h - 92
-    if headers and rows:
-        n_cols = len(headers)
-        col_w = usable_w / n_cols
-        row_h = 24.0
-
-        _rect(margin_x, cur_y - row_h, usable_w, row_h, fill=(0.93, 0.95, 0.98))
-        for idx_h, h_val in enumerate(headers):
-            hx = margin_x + idx_h * col_w
-            _rect(hx, cur_y - row_h, col_w, row_h, fill=None)
-            _txt(hx + 8, cur_y - row_h + 7.5, h_val, sz=10.0)
-        cur_y -= row_h
-
-        for idx_r, r_vals in enumerate(rows):
-            if cur_y - row_h < 70:
-                break
-            is_last = idx_r == len(rows) - 1
-            bg = (0.87, 0.90, 0.94) if is_last else ((0.99, 0.99, 1.0) if idx_r % 2 == 1 else (1.0, 1.0, 1.0))
-            _rect(margin_x, cur_y - row_h, usable_w, row_h, fill=bg)
-            for idx_c in range(n_cols):
-                cx = margin_x + idx_c * col_w
-                val_str = r_vals[idx_c] if idx_c < len(r_vals) else ""
-                _rect(cx, cur_y - row_h, col_w, row_h, fill=None)
-                _txt(cx + 8, cur_y - row_h + 7.5, val_str, sz=10.0)
-            cur_y -= row_h
-
-    if summary_rows:
-        cur_y -= 18
-        s_h = 22.0
-        half_w = usable_w / 2.0
-        for s_k, s_v in summary_rows:
-            if cur_y - s_h < 45:
-                break
-            _rect(margin_x, cur_y - s_h, half_w, s_h, fill=(0.97, 0.98, 0.99))
-            _rect(margin_x + half_w, cur_y - s_h, half_w, s_h, fill=(1.0, 1.0, 1.0))
-            _txt(margin_x + 8, cur_y - s_h + 6.5, s_k, sz=9.5)
-            _txt(margin_x + half_w + 8, cur_y - s_h + 6.5, s_v, sz=9.5)
-            cur_y -= s_h
-
-    stream_data = ("\n".join(cmds)).encode("ascii", errors="replace")
-
-    objs: List[bytes] = [
-        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
-        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
-        (
-            f"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {page_w:.0f} {page_h:.0f}] "
-            b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n"
-        ).encode("ascii"),
-        b"4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
-        (
-            f"5 0 obj\n<< /Length {len(stream_data)} >>\nstream\n".encode("ascii")
-            + stream_data
-            + b"\nendstream\nendobj\n"
-        ),
-    ]
-
-    buf = bytearray(b"%PDF-1.4\n")
-    offsets: List[int] = [0]
-    for obj in objs:
-        offsets.append(len(buf))
-        buf.extend(obj)
-
-    xref_pos = len(buf)
-    buf.extend(f"xref\n0 {len(objs) + 1}\n".encode("ascii"))
-    buf.extend(b"0000000000 65535 f \n")
-    for off in offsets[1:]:
-        buf.extend(f"{off:010d} 00000 n \n".encode("ascii"))
-    buf.extend(
-        f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n".encode("ascii")
-    )
-    return bytes(buf)
-
-
+# =====================================================================
+# 2. دوال الحساب والمنطق (قابلة للاستدعاء المباشر في اختبارات الوحدة)
+# =====================================================================
 def get_emp_identifiers(emp: Dict[str, Any]) -> Set[str]:
     ids: Set[str] = set()
     if emp.get("id"):
@@ -245,6 +139,7 @@ def build_peer_matrix_table(
     question_items: List[Dict[str, Any]],
     raters_scores: Dict[str, Dict[str, float]],
 ) -> Dict[str, Any]:
+    """بناء مصفوفة تقييمات الموظفين لجهة معينة (سينيور / مدير مباشر / مدير عام) مع إجمالي كل مقيّم والإجمالي الكلي."""
     q_names = [str(x.get("question") or "") for x in question_items if str(x.get("question") or "").strip()]
     rater_names = list(raters_scores.keys())
 
@@ -287,6 +182,7 @@ def build_full_employee_kpi_report_data(
     penalties_rewards: List[Dict[str, Any]],
     advances: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
+    """تجميع التفاصيل الكاملة لفترة التقييم للموظف: الإجازات، المكافآت، الجزاءات، السلف، الإضافي، والتأخيرات بالشهور."""
     emp_ids = get_emp_identifiers(emp)
     emp_id_primary = str(emp.get("id") or "")
 
@@ -470,6 +366,59 @@ def build_full_employee_kpi_report_data(
     }
 
 
+def build_simple_pdf_bytes(title_text: str, lines: List[str]) -> bytes:
+    """توليد ملف PDF قياسي خفيف بدون اعتماد على مكتبات خارجية."""
+    def _escape_pdf_str(s: str) -> str:
+        safe_ascii = s.encode("latin-1", errors="replace").decode("latin-1")
+        return safe_ascii.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+    content_cmds: List[str] = ["BT", "/F1 13 Tf", "40 760 Td", f"({_escape_pdf_str(title_text)}) Tj"]
+    y_pos = 736
+    for ln in lines[:44]:
+        if y_pos < 45:
+            break
+        content_cmds.append(f"1 0 0 1 40 {y_pos} Tm")
+        content_cmds.append("/F1 10 Tf")
+        content_cmds.append(f"({_escape_pdf_str(ln)}) Tj")
+        y_pos -= 15
+    content_cmds.append("ET")
+    stream_data = ("\n".join(content_cmds)).encode("latin-1", errors="replace")
+
+    objs: List[bytes] = [
+        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
+        (
+            b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n"
+        ),
+        b"4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
+        (
+            f"5 0 obj\n<< /Length {len(stream_data)} >>\nstream\n".encode("latin-1")
+            + stream_data
+            + b"\nendstream\nendobj\n"
+        ),
+    ]
+
+    pdf_buf = bytearray(b"%PDF-1.4\n")
+    offsets: List[int] = [0]
+    for obj in objs:
+        offsets.append(len(pdf_buf))
+        pdf_buf.extend(obj)
+
+    xref_pos = len(pdf_buf)
+    pdf_buf.extend(f"xref\n0 {len(objs) + 1}\n".encode("latin-1"))
+    pdf_buf.extend(b"0000000000 65535 f \n")
+    for off in offsets[1:]:
+        pdf_buf.extend(f"{off:010d} 00000 n \n".encode("latin-1"))
+    pdf_buf.extend(
+        f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n".encode("latin-1")
+    )
+    return bytes(pdf_buf)
+
+
+# =====================================================================
+# 3. دوال الواجهة وإدارة إعدادات وأسئلة الـ KPIs
+# =====================================================================
 def get_effective_org_state(org_settings: Dict[str, Any]) -> Dict[str, Any]:
     base = dict(org_settings or {})
     live_patch = st.session_state.get("live_org_patch")
@@ -566,25 +515,22 @@ def _render_q_editor_block(
 
 def _render_printable_and_pdf_actions(
     doc_title: str,
-    subtitle_text: str,
     table_rows: List[Dict[str, Any]],
     pdf_file_name: str,
-    summary_rows: Optional[List[Tuple[str, str]]],
+    pdf_lines: List[str],
     key_suffix: str,
 ) -> None:
     if not table_rows:
         return
     cols_keys = list(table_rows[0].keys())
     hdr_html = "".join(f"<th>{c_k}</th>" for c_k in cols_keys)
-    bdy_parts: List[str] = []
+    bdy_html = ""
     for idx_r, r_item in enumerate(table_rows):
         is_tot = str(r_item.get("البند") or "") == "الإجمالي" and idx_r == len(table_rows) - 1
         tr_cls = " class='tot-row'" if is_tot else ""
-        cells_html = "".join(f"<td>{r_item[c_k]}</td>" for c_k in cols_keys)
-        bdy_parts.append(f"<tr{tr_cls}>{cells_html}</tr>")
-    bdy_html = "".join(bdy_parts)
+        bdy_html += f"<tr{tr_cls}>" + "".join(f"<td>{r_item[c_k]}</td>" for c_k in cols_keys) + "</tr>"
 
-    print_html_doc = (
+    print_doc_json = json.dumps(
         f"<!DOCTYPE html><html dir='rtl' lang='ar'><head><meta charset='utf-8'><title>{doc_title}</title>"
         "<style>"
         "body{font-family:'Cairo',Tahoma,sans-serif;direction:rtl;margin:28px;color:#0f172a;}"
@@ -598,32 +544,22 @@ def _render_printable_and_pdf_actions(
         f"<table><thead><tr>{hdr_html}</tr></thead><tbody>{bdy_html}</tbody></table>"
         "</body></html>"
     )
-    b64_html = base64.b64encode(print_html_doc.encode("utf-8")).decode("ascii")
-
-    pdf_rows_list: List[List[str]] = [
-        [str(r_item.get(c_k, "")) for c_k in cols_keys]
-        for r_item in table_rows
-    ]
-    pdf_bytes = build_report_pdf_bytes(
-        report_title=doc_title,
-        subtitle_text=subtitle_text,
-        headers=cols_keys,
-        rows=pdf_rows_list,
-        summary_rows=summary_rows,
-    )
 
     p_col_a, p_col_b = st.columns([1.5, 1.5])
     with p_col_a:
-        btn_html = (
-            "<div style='direction:rtl;text-align:right;'>"
-            f"<button data-b64='{b64_html}' onclick=\"var txt=decodeURIComponent(escape(atob(this.getAttribute('data-b64'))));var w=window.open('','_blank','width=950,height=700');w.document.write(txt);w.document.close();w.focus();setTimeout(function(){{w.print();}},300);\" "
-            "style='background:#0f4c5c;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-family:Cairo,sans-serif;font-size:14px;font-weight:700;cursor:pointer;'>"
-            "🖨️ طباعة في ورقة مستقلة"
-            "</button>"
-            "</div>"
+        st.components.v1.html(
+            f"""
+            <div style="direction:rtl;text-align:right;">
+                <button onclick="var w=window.open('','_blank','width=950,height=700');w.document.write({print_doc_json});w.document.close();w.focus();setTimeout(function(){{w.print();}},300);"
+                        style="background:#0f4c5c;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-family:'Cairo',sans-serif;font-size:14px;font-weight:700;cursor:pointer;">
+                    🖨️ طباعة في ورقة مستقلة
+                </button>
+            </div>
+            """,
+            height=50,
         )
-        st.components.v1.html(btn_html, height=50)
     with p_col_b:
+        pdf_bytes = build_simple_pdf_bytes(doc_title, pdf_lines)
         st.download_button(
             "📄 تصدير PDF",
             data=pdf_bytes,
@@ -634,6 +570,7 @@ def _render_printable_and_pdf_actions(
 
 
 def render_kpi_settings_tab(org_settings: Dict[str, Any]) -> None:
+    """تبويب إعدادات وأسئلة الـ KPIs داخل شاشة الصلاحيات والإعدادات."""
     eff_org = get_effective_org_state(org_settings)
     st.markdown("#### ⚙️ إعدادات الـ KPIs")
 
@@ -811,6 +748,7 @@ def render_kpis_module(
     self_q_by_tab = get_all_self_questions(eff_org)
     peer_q_by_target = get_all_peer_questions(eff_org)
 
+    # --- حالة المدير العام: تقييم الموظفين + التقارير الأربعة ---
     if user_role == "general_manager":
         gm_tabs = st.tabs([
             "👥 تقييم الموظفين",
@@ -971,19 +909,22 @@ def render_kpis_module(
                     st.markdown("**تفصيل التأخيرات:**")
                     st.dataframe(det["late_list"], use_container_width=True, hide_index=True)
 
-                emp_summary_pdf: List[Tuple[str, str]] = [
-                    ("Emp No", str(target_rep_emp.get("employee_no") or "-")),
-                    ("Leaves Days", f"{det['total_leave_days']} (Casual: {det['casual_days']} | Regular: {det['regular_days']})"),
-                    ("Rewards / Penalties", f"Rewards: {det['rewards_count']} | Penalties: {det['penalties_count']}"),
-                    ("Advances / OT / Late", f"Advances: {det['advances_total_amt']:,.2f} | OT: {det['total_ot_days']} d | Late: {det['total_late_cnt']}"),
+                pdf_lines = [
+                    f"Employee No: {target_rep_emp.get('employee_no', '')}",
+                    f"Period: {kpi_start_dt.isoformat()} to {kpi_end_dt.isoformat()}",
+                    f"Self Total: {tot_self_val:g} | Direct Manager Total: {tot_mgr_val:g}",
+                    f"Leaves: {det['total_leave_days']} (Casual: {det['casual_days']}, Regular: {det['regular_days']})",
+                    f"Rewards: {det['rewards_count']} | Penalties: {det['penalties_count']} | Advances: {det['advances_total_amt']:g}",
+                    f"Overtime Days: {det['total_ot_days']} | Late Count: {det['total_late_cnt']}",
                 ]
+                for idx_c, r_c in enumerate(rows_data, start=1):
+                    pdf_lines.append(f"Item {idx_c}: Self={r_c['تقييم الموظف لنفسه']} | Mgr={r_c['تقييم المدير المباشر']}")
 
                 _render_printable_and_pdf_actions(
-                    doc_title=f"الاسم: {target_rep_emp.get('name_ar')}",
-                    subtitle_text=f"الفترة: {period_lbl}",
+                    doc_title=f"الاسم: {target_rep_emp.get('name_ar')} | الفترة: {period_lbl}",
                     table_rows=rows_data + [total_row],
                     pdf_file_name=f"kpi_employee_{target_rep_emp.get('employee_no', 'emp')}.pdf",
-                    summary_rows=emp_summary_pdf,
+                    pdf_lines=pdf_lines,
                     key_suffix=f"emp_{target_rep_emp['id']}",
                 )
 
@@ -1025,11 +966,10 @@ def render_kpis_module(
                     st.dataframe(mat_s["rows"], use_container_width=True, hide_index=True)
                     st.metric("الإجمالي الكلي", f"{mat_s['grand_total']:g}")
                     _render_printable_and_pdf_actions(
-                        doc_title=f"تقرير تقييم السينيور: {picked_sen_obj.get('name_ar')}",
-                        subtitle_text=f"الفترة: {period_lbl} | Grand Total: {mat_s['grand_total']:g}",
+                        doc_title=f"تقرير تقييم السينيور: {picked_sen_obj.get('name_ar')} | الإجمالي الكلي: {mat_s['grand_total']:g}",
                         table_rows=mat_s["rows"],
                         pdf_file_name="kpi_senior_report.pdf",
-                        summary_rows=[("Grand Total", f"{mat_s['grand_total']:g}")],
+                        pdf_lines=[f"Senior: {picked_sen_obj.get('employee_no', '')}", f"Grand Total: {mat_s['grand_total']:g}"],
                         key_suffix="senior_rep",
                     )
 
@@ -1071,11 +1011,10 @@ def render_kpis_module(
                     st.dataframe(mat_m["rows"], use_container_width=True, hide_index=True)
                     st.metric("الإجمالي الكلي", f"{mat_m['grand_total']:g}")
                     _render_printable_and_pdf_actions(
-                        doc_title=f"تقرير تقييم المدير المباشر: {picked_mgr_obj.get('name_ar')}",
-                        subtitle_text=f"الفترة: {period_lbl} | Grand Total: {mat_m['grand_total']:g}",
+                        doc_title=f"تقرير تقييم المدير المباشر: {picked_mgr_obj.get('name_ar')} | الإجمالي الكلي: {mat_m['grand_total']:g}",
                         table_rows=mat_m["rows"],
                         pdf_file_name="kpi_manager_report.pdf",
-                        summary_rows=[("Grand Total", f"{mat_m['grand_total']:g}")],
+                        pdf_lines=[f"Manager: {picked_mgr_obj.get('employee_no', '')}", f"Grand Total: {mat_m['grand_total']:g}"],
                         key_suffix="manager_rep",
                     )
 
@@ -1102,15 +1041,15 @@ def render_kpis_module(
                 st.dataframe(mat_g["rows"], use_container_width=True, hide_index=True)
                 st.metric("الإجمالي الكلي", f"{mat_g['grand_total']:g}")
                 _render_printable_and_pdf_actions(
-                    doc_title="تقرير تقييم المدير العام",
-                    subtitle_text=f"الفترة: {period_lbl} | Grand Total: {mat_g['grand_total']:g}",
+                    doc_title=f"تقرير تقييم المدير العام | الإجمالي الكلي: {mat_g['grand_total']:g}",
                     table_rows=mat_g["rows"],
                     pdf_file_name="kpi_gm_report.pdf",
-                    summary_rows=[("Grand Total", f"{mat_g['grand_total']:g}")],
+                    pdf_lines=[f"Grand Total: {mat_g['grand_total']:g}"],
                     key_suffix="gm_rep",
                 )
         return
 
+    # --- المستخدمون غير المدير العام ---
     has_my_senior = bool(str(current_user.get("senior_id") or "").strip())
     my_mgr_id_str = str(current_user.get("direct_manager_id") or "").strip()
     my_mgr_emp = emp_by_any_id.get(my_mgr_id_str)
