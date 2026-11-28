@@ -2,7 +2,6 @@ from datetime import date
 from typing import Any, Dict, List, Optional, Set, Tuple
 import base64
 import io
-import json
 import pandas as pd
 import streamlit as st
 
@@ -77,6 +76,27 @@ DEFAULT_PEER_QUESTIONS_BY_TARGET: Dict[str, List[Dict[str, Any]]] = {
         {"question": "الشفافية والحزم في تطبيق السياسات واللوائح", "points": 30.0},
     ],
 }
+
+
+def apply_full_rtl_styles() -> None:
+    """فرض الاتجاه من اليمين إلى اليسار على كافة عناصر الواجهة والتفاصيل الصغيرة."""
+    rtl_css = (
+        "<style>"
+        ".stApp, .main, [data-testid='stAppViewContainer'], [data-testid='stHeader'], "
+        "[data-testid='stMarkdownContainer'], [data-testid='stCaptionContainer'], "
+        "[data-testid='stText'], [data-testid='stMetric'], [data-testid='stMetricLabel'], "
+        "[data-testid='stMetricValue'], .stMarkdown, .stCaption, .stText, p, span, div, label, h1, h2, h3, h4, h5, h6 {"
+        "direction: rtl !important; text-align: right !important;"
+        "}"
+        "[data-testid='stTabs'] [role='tablist'] {"
+        "direction: rtl !important; justify-content: flex-start !important; flex-wrap: wrap !important;"
+        "}"
+        "[data-testid='stDataFrame'], [data-testid='stTable'] {"
+        "direction: rtl !important;"
+        "}"
+        "</style>"
+    )
+    st.markdown(rtl_css, unsafe_allow_html=True)
 
 
 def build_report_excel_bytes(
@@ -528,6 +548,7 @@ def _render_printable_and_excel_actions(
 
 
 def render_kpi_settings_tab(org_settings: Dict[str, Any]) -> None:
+    apply_full_rtl_styles()
     eff_org = get_effective_org_state(org_settings)
     st.markdown("#### ⚙️ إعدادات الـ KPIs")
 
@@ -679,6 +700,7 @@ def render_kpis_module(
     kpi_evaluations: List[Dict[str, Any]],
     org_settings: Dict[str, Any],
 ) -> None:
+    apply_full_rtl_styles()
     st.markdown("### 🎯 تقييم الأداء (KPIs)")
     user_id = str(current_user.get("id"))
     user_role = (current_user.get("role") or "employee").strip().lower()
