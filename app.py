@@ -1,6 +1,7 @@
 from typing import Any, Dict, List
 import streamlit as st
 
+from complaints_module import render_complaints_module
 from db import fetch_table, insert_record, write_audit_log
 from regulations_module import render_regulations_module
 from ui_components import (
@@ -188,6 +189,7 @@ def main() -> None:
             "الـ KPIs",
             "الموظفون والفروع والصلاحيات",
             "اللوائح",
+            "الشكاوى",
         ]
         current_radio_val = st.session_state["active_page"] if st.session_state["active_page"] in main_menu else "الداش بورد"
         picked_menu = st.radio("القائمة الرئيسية", main_menu, index=main_menu.index(current_radio_val))
@@ -214,7 +216,7 @@ def main() -> None:
         f"""
         <div class="top-banner">
             <h3>{org_settings.get('org_name') or 'معامل ا.د أسامة عبد المتعال منصور'}</h3>
-            <p>نظام HR متكامل (الإجازات، الجزاءات والمكافآت، السلف، البصمة والمرتبات، التقارير، اللوائح والـ KPIs)</p>
+            <p>نظام HR متكامل (الإجازات، الجزاءات والمكافآت، السلف، البصمة والمرتبات، التقارير، اللوائح، الشكاوى والـ KPIs)</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -281,6 +283,8 @@ def main() -> None:
         )
     elif page == "اللوائح":
         render_regulations_module(current_user=current_user, org_settings=org_settings)
+    elif page == "الشكاوى":
+        render_complaints_module(current_user=current_user, employees=employees)
 
 
 if __name__ == "__main__":
